@@ -2278,10 +2278,6 @@ export function Inbox() {
           <PageTabBar
             items={[
               {
-                value: "matters",
-                label: "事项",
-              },
-              {
                 value: "split",
                 label: "会话",
               },
@@ -2296,6 +2292,10 @@ export function Inbox() {
               { value: "unread", label: "Unread" },
               { value: "blocked", label: "Blocked" },
               { value: "all", label: "All" },
+              {
+                value: "matters",
+                label: "事项",
+              },
             ]}
           />
         </Tabs>
@@ -2319,13 +2319,13 @@ export function Inbox() {
         <Tabs value={tab} onValueChange={(value) => navigate(`/inbox/${value}`)}>
           <PageTabBar
             items={[
-              { value: "matters", label: "事项" },
               { value: "split", label: "会话" },
               { value: "mine", label: "Mine" },
               { value: "recent", label: "Recent" },
               { value: "unread", label: "Unread" },
               { value: "blocked", label: "Blocked" },
               { value: "all", label: "All" },
+              { value: "matters", label: "事项" },
             ]}
           />
         </Tabs>
@@ -2371,10 +2371,6 @@ export function Inbox() {
           <PageTabBar
             items={[
               {
-                value: "matters",
-                label: "事项",
-              },
-              {
                 value: "split",
                 label: "会话",
               },
@@ -2389,6 +2385,10 @@ export function Inbox() {
               { value: "unread", label: "Unread" },
               { value: "blocked", label: "Blocked" },
               { value: "all", label: "All" },
+              {
+                value: "matters",
+                label: "事项",
+              },
             ]}
           />
         </Tabs>
