@@ -300,6 +300,9 @@ export const issueExecutionPolicySchema = z.object({
   reviewPreset: lowTrustReviewPresetPolicySchema.optional(),
   authorizationPolicy: trustAuthorizationPolicySchema.optional(),
   maxReviewRounds: z.number().int().positive().max(50).optional().nullable().default(null),
+  // MUL-538: while true the stranded sweep leaves this card alone unless its
+  // last run ended badly. Set automatically when a finished card is reopened.
+  autoDispatchPaused: z.boolean().optional(),
 });
 
 export const issueExecutionMonitorStateSchema = z.object({
@@ -608,6 +611,10 @@ export const updateIssueSchema = objectWithoutDefaults(
   reviewInteractionId: z.string().guid().optional(),
   reviewRequest: issueReviewRequestSchema.optional().nullable(),
   reopen: z.boolean().optional(),
+  // MUL-538: merge-safe toggle for the pause flag. Writing `executionPolicy`
+  // replaces the whole policy, so a caller that only wants to un-pause a card
+  // would wipe its stages and monitor; this sets just the one field.
+  autoDispatchPaused: z.boolean().optional(),
   resume: z.boolean().optional(),
   interrupt: z.boolean().optional(),
   hiddenAt: z.string().datetime().nullable().optional(),

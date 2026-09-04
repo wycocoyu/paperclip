@@ -694,6 +694,12 @@ export interface IssueExecutionPolicy {
    * default. Human decisions reset the round counter.
    */
   maxReviewRounds?: number | null;
+  /**
+   * MUL-538. While true the stranded sweep leaves this card alone unless its
+   * last run ended badly, so a standing assignment stops re-arming itself.
+   * Set automatically when a finished card is reopened; clearable by hand.
+   */
+  autoDispatchPaused?: boolean;
 }
 
 export interface IssueExecutionMonitorState {

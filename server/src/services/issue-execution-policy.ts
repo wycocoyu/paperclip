@@ -400,8 +400,17 @@ export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPol
 
   const reviewPreset = parsed.data.reviewPreset;
   const authorizationPolicy = parsed.data.authorizationPolicy;
+  const autoDispatchPaused = parsed.data.autoDispatchPaused;
 
-  if (stages.length === 0 && !monitor && !reviewPreset && !authorizationPolicy) return null;
+  // A policy carrying only the pause flag is still a policy — dropping it to
+  // null here would silently un-pause the card on the next write (MUL-538).
+  if (
+    stages.length === 0
+    && !monitor
+    && !reviewPreset
+    && !authorizationPolicy
+    && autoDispatchPaused === undefined
+  ) return null;
 
   return {
     mode: parsed.data.mode ?? "normal",
@@ -410,6 +419,7 @@ export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPol
     ...(monitor ? { monitor } : {}),
     ...(reviewPreset ? { reviewPreset } : {}),
     ...(authorizationPolicy ? { authorizationPolicy } : {}),
+    ...(autoDispatchPaused === undefined ? {} : { autoDispatchPaused }),
     ...(parsed.data.maxReviewRounds != null ? { maxReviewRounds: parsed.data.maxReviewRounds } : {}),
   };
 }

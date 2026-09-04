@@ -578,6 +578,8 @@ export function IssueProperties({
     ? agents?.find((a) => a.id === issue.assigneeAgentId)
     : null;
   const assigneeAdapterType = assignee?.adapterType ?? null;
+  // MUL-538: true while the stranded sweep is told to leave this card alone.
+  const autoDispatchPaused = issue.executionPolicy?.autoDispatchPaused === true;
   const assigneeAdapterOverrides = issue.assigneeAdapterOverrides ?? null;
   const showAssigneeAdapterOptions = assigneeAdapterOverrides !== null;
   const supportsAssigneeOverrides = Boolean(
@@ -2133,6 +2135,24 @@ export function IssueProperties({
             showLabel
           />
         </PropertyRow>
+
+        {/* MUL-538: a paused card shows an assignee that will not act on its
+            own, which reads as broken unless the row says so. Only rendered
+            while paused — an unpaused card is the normal case and does not
+            need a row explaining that nothing is switched off. */}
+        {autoDispatchPaused ? (
+          <PropertyRow label="自动派发">
+            <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+              <span className="truncate text-xs text-muted-foreground">
+                已暂停，改成开放态不会自己跑。进程崩了仍会自动续。
+              </span>
+              <ToggleSwitch
+                checked={false}
+                onCheckedChange={() => onUpdate({ autoDispatchPaused: false })}
+              />
+            </div>
+          </PropertyRow>
+        ) : null}
 
         {/* PAP-411: priority UI is hidden behind SHOW_TASK_PRIORITY_UI. Revive by flipping the flag. */}
         {SHOW_TASK_PRIORITY_UI && (

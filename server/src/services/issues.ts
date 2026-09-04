@@ -70,6 +70,10 @@ import { isForeignKeyViolation } from "../db-errors.js";
 import { logger } from "../middleware/logger.js";
 import { parseObject } from "../adapters/utils.js";
 import {
+  readAutoDispatchPausedInput,
+  shouldPauseAutoDispatchOnReopen,
+} from "./auto-dispatch-pause.js";
+import {
   hydrateSuccessfulRunHandoffLiveness,
   SUCCESSFUL_RUN_HANDOFF_LIVE_WAKE_STATUSES,
 } from "./successful-run-handoff-state.js";
@@ -3463,6 +3467,7 @@ async function blockedByMapForIssues(
 }
 
 const BLOCKED_INBOX_TERMINAL_STATUSES = ["done", "cancelled"] as const;
+
 const BLOCKED_INBOX_ACTIVE_RUN_STATUSES = ["queued", "running"] as const;
 const BLOCKED_INBOX_ACTIVE_WAKE_STATUSES = SUCCESSFUL_RUN_HANDOFF_LIVE_WAKE_STATUSES;
 const BLOCKED_INBOX_PENDING_INTERACTION_STATUSES = ["pending"] as const;
@@ -7725,6 +7730,38 @@ export function issueService(db: Db) {
         patch.unblockDescriptor = null;
         patch.blockedTransitionAt = null;
         patch.blockedOwnerNotifiedAt = null;
+      }
+      // MUL-538: merge-safe manual toggle. Writing `executionPolicy` wholesale
+      // would drop the card's stages and monitor, so the caller sets this one
+      // field and we fold it into whatever policy the card already has.
+      const autoDispatchPausedInput = (issueData as { autoDispatchPaused?: boolean }).autoDispatchPaused;
+      delete (issueData as { autoDispatchPaused?: boolean }).autoDispatchPaused;
+      delete (patch as { autoDispatchPaused?: boolean }).autoDispatchPaused;
+      if (autoDispatchPausedInput !== undefined) {
+        patch.executionPolicy = {
+          ...parseObject(issueData.executionPolicy ?? existing.executionPolicy),
+          autoDispatchPaused: autoDispatchPausedInput,
+        };
+      }
+      // MUL-538: reopening a finished card pauses its auto-dispatch. An
+      // assignment in Paperclip is standing state and the status is the gate,
+      // so `done` -> `in_progress` silently re-arms an assignee nobody was
+      // thinking about and the agent starts running by itself. Pausing keeps
+      // the assignee (it doubles as "whose work is this" for progress
+      // accounting) while the stranded sweep leaves the card alone until a
+      // person or a mention asks for it. Crash recovery still goes through:
+      // the sweep only honours the pause when the last run ended cleanly.
+      // Explicitly writing autoDispatchPaused in the same request wins, so a
+      // caller that means "reopen and run it" can say so in one call.
+      if (shouldPauseAutoDispatchOnReopen({
+        fromStatus: existing.status,
+        toStatus: issueData.status,
+        explicitPause: autoDispatchPausedInput ?? readAutoDispatchPausedInput(issueData.executionPolicy),
+      })) {
+        patch.executionPolicy = {
+          ...parseObject(issueData.executionPolicy ?? existing.executionPolicy),
+          autoDispatchPaused: true,
+        };
       }
       if (issueData.requestDepth !== undefined) {
         patch.requestDepth = clampIssueRequestDepth(issueData.requestDepth);
