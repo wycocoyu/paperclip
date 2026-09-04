@@ -1701,9 +1701,20 @@ function IssueDetailActivityTab({
   );
 }
 
-export function IssueDetail() {
+/**
+ * `issueId` / `embedded` let a pane host this page without a route of its own
+ * (the inbox split tab). Both default to the routed behaviour, so the
+ * `issues/:issueId` route is unchanged; `embedded` only suppresses the
+ * page-chrome writes (breadcrumbs, mobile toolbar) that would otherwise
+ * clobber the host page's own chrome.
+ */
+export function IssueDetail({
+  issueId: issueIdProp,
+  embedded = false,
+}: { issueId?: string; embedded?: boolean } = {}) {
   const { t } = useTranslation();
-  const { issueId } = useParams<{ issueId: string }>();
+  const { issueId: routedIssueId } = useParams<{ issueId: string }>();
+  const issueId = issueIdProp ?? routedIssueId;
   const { selectedCompanyId } = useCompany();
   // Classic Task Interface (flag: enableClassicTaskInterface): with the flag
   // OFF (the default) the chat-style thread owns the center column — the
@@ -3445,6 +3456,9 @@ export function IssueDetail() {
   });
 
   useEffect(() => {
+    // Embedded in a pane the host page owns the breadcrumb trail; writing ours
+    // would replace it with this issue's.
+    if (embedded) return;
     setBreadcrumbs([
       sourceBreadcrumb,
       {
@@ -3457,6 +3471,7 @@ export function IssueDetail() {
       },
     ]);
   }, [
+    embedded,
     breadcrumbTitle,
     breadcrumbIdentifier,
     hasLiveRuns,
@@ -3482,6 +3497,9 @@ export function IssueDetail() {
 
   // Redirect to identifier-based URL if navigated via UUID
   useEffect(() => {
+    // Embedded: the URL belongs to the host page, and the host addresses this
+    // pane by issue id — rewriting the path would navigate the whole page away.
+    if (embedded) return;
     const nextState = resolvedIssueDetailState ?? location.state;
     if (issue?.identifier && issueId !== issue.identifier) {
       rememberIssueDetailLocationState(issue.identifier, nextState, location.search);
@@ -3499,7 +3517,7 @@ export function IssueDetail() {
         state: nextState,
       });
     }
-  }, [issue, issueId, navigate, location.state, location.search, resolvedIssueDetailState]);
+  }, [embedded, issue, issueId, navigate, location.state, location.search, resolvedIssueDetailState]);
 
   useEffect(() => {
     if (!issue?.id) return;
@@ -3515,6 +3533,9 @@ export function IssueDetail() {
     // (MUL-122, when classic became the default and "unknown" stopped meaning
     // chat-first).
     if (!classicTaskInterfaceLoaded) return;
+    // Embedded: the properties pane belongs to the host page's layout, and
+    // closePanel() on unmount would shut a panel we never opened.
+    if (embedded) return;
     if (!panelIssue || suppressPanelForFirstTask) {
       closePanel();
       return;
@@ -3538,6 +3559,7 @@ export function IssueDetail() {
     return () => closePanel();
   }, [
     classicTaskInterfaceLoaded,
+    embedded,
     closePanel,
     handleIssuePropertiesUpdate,
     issuePanelKey,
@@ -3932,7 +3954,8 @@ export function IssueDetail() {
   };
 
   const backHref = sourceBreadcrumb.href ?? "/inbox";
-  const showInboxToolbar = isMobile && isFromInbox;
+  // Embedded: the host page owns the mobile toolbar slot, so never claim it.
+  const showInboxToolbar = isMobile && isFromInbox && !embedded;
   const archivePending = archiveFromInbox.isPending;
   const issueHidden = !!issue?.hiddenAt;
   const canArchiveFromInbox = isFromInbox && !!issue?.id && !issueHidden;
@@ -3957,7 +3980,7 @@ export function IssueDetail() {
     );
 
     return () => setMobileToolbar(null);
-  }, [showInboxToolbar, backHref, issue?.id, issueHidden, archivePending, setMobileToolbar]);
+  }, [showInboxToolbar, backHref, issue?.id, issueHidden, archivePending, setMobileToolbar, embedded]);
 
   const attachmentsInitialLoading = attachmentsLoading && attachments === undefined;
   const loadOlderComments = useCallback(() => {
