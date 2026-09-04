@@ -177,6 +177,7 @@ import {
 import { useDismissedInboxAlerts, useInboxDismissals, useReadInboxItems } from "../hooks/useInboxBadge";
 import { useInboxSortAttention } from "../hooks/useInboxSortAttention";
 import { InboxMattersTab } from "../components/InboxMattersTab";
+import { InboxSplitTab } from "../components/InboxSplitTab";
 import {
   captureInboxOrderPin,
   reconcileInboxOrderPin,
@@ -723,6 +724,7 @@ export function Inbox() {
   const pathSegment = location.pathname.split("/").pop() ?? "matters";
   const tab: InboxTab =
     pathSegment === "matters"
+    || pathSegment === "split"
     || pathSegment === "mine"
     || pathSegment === "recent"
     || pathSegment === "all"
@@ -2280,6 +2282,10 @@ export function Inbox() {
                 label: "事项",
               },
               {
+                value: "split",
+                label: "会话",
+              },
+              {
                 value: "mine",
                 label: "Mine",
               },
@@ -2293,7 +2299,37 @@ export function Inbox() {
             ]}
           />
         </Tabs>
-        <InboxMattersTab />
+        <InboxMattersTab
+          onDismiss={(item) => dismissInboxItem(`attention:${item.dedupKey ?? item.subject.id}`)}
+        />
+      </div>
+    );
+  }
+
+  // The 会话 tab (MUL-537): same feed as Recent, read side by side instead of
+  // one navigation per item. Full-height flex so the two panes scroll
+  // independently rather than the page scrolling as one column.
+  if (tab === "split") {
+    return (
+      <div className="flex h-[calc(100vh-8rem)] flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h1 className="text-lg font-semibold text-foreground">Inbox</h1>
+          <p className="text-xs text-muted-foreground">左边选，右边看，不跳页</p>
+        </div>
+        <Tabs value={tab} onValueChange={(value) => navigate(`/inbox/${value}`)}>
+          <PageTabBar
+            items={[
+              { value: "matters", label: "事项" },
+              { value: "split", label: "会话" },
+              { value: "mine", label: "Mine" },
+              { value: "recent", label: "Recent" },
+              { value: "unread", label: "Unread" },
+              { value: "blocked", label: "Blocked" },
+              { value: "all", label: "All" },
+            ]}
+          />
+        </Tabs>
+        <InboxSplitTab issues={visibleTouchedIssues} />
       </div>
     );
   }
@@ -2337,6 +2373,10 @@ export function Inbox() {
               {
                 value: "matters",
                 label: "事项",
+              },
+              {
+                value: "split",
+                label: "会话",
               },
               {
                 value: "mine",
