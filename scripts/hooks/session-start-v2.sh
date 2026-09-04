@@ -29,16 +29,35 @@ OV_BASE="${OPENVIKING_URL:-http://127.0.0.1:1933}"
 TERMINAL_SLUG="${1:-}"
 PROFILE="${2:-}"
 
-# 身份由注册方传 slug 决定，不做环境嗅探。v1 那次嗅探踩过两个坑：找 CODEX_SANDBOX
+# 身份由注册方传 slug 决定，不做环境变量嗅探。v1 那次嗅探踩过两个坑：找 CODEX_SANDBOX
 # 而非沙箱的 Codex 从不设它，以及继承变量让 ZCode shell 里起的 Codex 签成 zcode。
 # 猜错比不猜更糟，认不出的调用方直接被告知，不借用别人的名字（MUL-113）。
+#
+# 但 slug 是注册时写死的常量，而一份 hook 配置可能被不止一个宿主执行：Cursor 会连
+# Claude 的 SessionStart 一起跑，于是 Cursor 会话顶着 Claude 的 agent id 出现，正是
+# MUL-113 要防的「借用别人的名字」。所以先让 CLI 按进程祖先认一次宿主。进程树不像
+# 环境变量那样会被继承，CLI 也是先祖先后环境，探不出来才退回下面的 slug 分支。
+PCLI=$(command -v paperclipai 2>/dev/null || command -v paperclip 2>/dev/null || true)
+IDENTITY=""
+if [ -n "$PCLI" ]; then
+  IDENTITY=$("$PCLI" whoami --json 2>/dev/null | $PY3 -c '
+import json,sys
+try:
+    d = json.load(sys.stdin)
+    n, i = d.get("name"), d.get("id")
+    print(f"你是 {n}（agent id {i}）" if d.get("kind") == "agent" and n and i else "", end="")
+except Exception:
+    pass
+' 2>/dev/null) || IDENTITY=""
+fi
+step "detect=$([ -n "$IDENTITY" ] && echo ok || echo miss)"
+
 case "$TERMINAL_SLUG" in
-  claude-terminal|codex-terminal|zcode-terminal|qoder) KEY_FILE="$HOME/.paperclip/keys/$TERMINAL_SLUG" ;;
+  claude-terminal|codex-terminal|zcode-terminal|cursor-terminal|qoder) KEY_FILE="$HOME/.paperclip/keys/$TERMINAL_SLUG" ;;
   *) KEY_FILE="" ;;
 esac
 
-IDENTITY=""
-if [ -n "$KEY_FILE" ] && [ -r "$KEY_FILE" ]; then
+if [ -z "$IDENTITY" ] && [ -n "$KEY_FILE" ] && [ -r "$KEY_FILE" ]; then
   KEY=$(tr -d '\r\n' < "$KEY_FILE")
   if [ -n "$KEY" ]; then
     IDENTITY=$($CURL -sf --max-time 3 -H "Authorization: Bearer ${KEY}" \

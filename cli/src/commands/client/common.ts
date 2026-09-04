@@ -200,6 +200,9 @@ const TERMINAL_SIGNATURES: Array<{ slug: string; envVars: string[] }> = [
   { slug: "claude-terminal", envVars: ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PROJECT_DIR"] },
   { slug: "codex-terminal", envVars: ["CODEX_SANDBOX", "CODEX_THREAD_ID"] },
   { slug: "zcode-terminal", envVars: ["ZCODE_BASE_URL"] },
+  // Cursor's launcher exports CURSOR_INVOKED_AS on every start. Env can be
+  // inherited, so this only decides when ancestry came up empty.
+  { slug: "cursor-terminal", envVars: ["CURSOR_INVOKED_AS", "CURSOR_TRACE_ID"] },
 ];
 
 /** Ancestry matchers: the closest recognizable ancestor is the real host.
@@ -213,6 +216,10 @@ const TERMINAL_ANCESTRY: Array<{ slug: string; pattern: RegExp }> = [
   { slug: "claude-terminal", pattern: /(^|\/)claude(\s|$)/ },
   { slug: "zcode-terminal", pattern: /(^|\/)(zcode-cli|zcode-host[-\w]*|ZCode)(\s|$)/ },
   { slug: "qoder", pattern: /(^|\/)Qoder(\s|$)/ },
+  // Cursor CLI execs with argv[0] as either `cursor` or the bare `agent` alias,
+  // so also match the versioned install path that both forms carry. The IDE's
+  // own processes are capital-C `Cursor` and deliberately do not match.
+  { slug: "cursor-terminal", pattern: /(^|\/)cursor(-agent)?(\s|$)|cursor-agent\/versions\// },
 ];
 
 /**
