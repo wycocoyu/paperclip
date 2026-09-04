@@ -43,6 +43,7 @@ import { instanceSettingsService } from "../instance-settings.js";
 import { issueRecoveryActionService } from "../issue-recovery-actions.js";
 import { issueTreeControlService } from "../issue-tree-control.js";
 import { TERMINAL_HEARTBEAT_RUN_STATUSES, issueService } from "../issues.js";
+import { isAutoDispatchPaused } from "../auto-dispatch-pause.js";
 import {
   applyIssueMonitorPolicyTransition,
   normalizeIssueExecutionPolicy,
@@ -4111,6 +4112,19 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       }
 
       let latestRun = await getLatestIssueRun(issue.companyId, issue.id);
+
+      // MUL-538: a card whose auto-dispatch is paused only gets picked up when
+      // its last run actually died. In Paperclip an assignment is standing
+      // state and the status is the gate, so flipping a `done` card back to an
+      // open status re-arms an assignment the operator was not thinking about
+      // and the agent starts running on its own. The pause marker holds that
+      // back without clearing the assignee (which also carries "whose work is
+      // this" for progress accounting). Crash recovery is deliberately left
+      // through: an unsuccessful terminal run is the reason this sweep exists.
+      if (isAutoDispatchPaused(issue) && !isUnsuccessfulTerminalIssueRun(latestRun)) {
+        result.skipped += 1;
+        continue;
+      }
 
       // Terminal contributor sessions are the live execution path by
       // definition (the operator's terminal holds the work). The stranded
