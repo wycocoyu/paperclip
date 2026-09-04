@@ -47,3 +47,32 @@ export function shouldPauseAutoDispatchOnReopen(input: {
   if (input.explicitPause !== undefined) return false;
   return TERMINAL_STATUSES.has(input.fromStatus) && !TERMINAL_STATUSES.has(input.toStatus);
 }
+
+/**
+ * Run statuses that mean the previous attempt died rather than finished. Kept
+ * in step with `UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES` in the recovery
+ * service — that list is the definition, this one exists so the gate below can
+ * be tested without standing up the whole sweep.
+ */
+const UNSUCCESSFUL_RUN_STATUSES = new Set<string>([
+  "interrupted",
+  "failed",
+  "cancelled",
+  "timed_out",
+]);
+
+/**
+ * The stranded-sweep gate: skip a paused card unless its last run died.
+ *
+ * A card with no run at all counts as "did not die" — nothing crashed, so
+ * picking it up would be a fresh dispatch, which is exactly what the pause is
+ * for. Crash recovery keeps working because a failed / interrupted / cancelled
+ * / timed-out run puts the card back in scope regardless of the pause.
+ */
+export function shouldSkipStrandedSweep(input: {
+  issue: Pick<typeof issues.$inferSelect, "executionPolicy">;
+  latestRunStatus: string | null | undefined;
+}) {
+  if (!isAutoDispatchPaused(input.issue)) return false;
+  return !UNSUCCESSFUL_RUN_STATUSES.has(input.latestRunStatus ?? "");
+}

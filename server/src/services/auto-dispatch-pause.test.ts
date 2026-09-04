@@ -3,6 +3,7 @@ import {
   isAutoDispatchPaused,
   readAutoDispatchPausedInput,
   shouldPauseAutoDispatchOnReopen,
+  shouldSkipStrandedSweep,
 } from "./auto-dispatch-pause.js";
 import { normalizeIssueExecutionPolicy } from "./issue-execution-policy.js";
 
@@ -93,5 +94,31 @@ describe("normalizeIssueExecutionPolicy keeps the pause flag", () => {
 
   it("still collapses a policy that carries nothing at all", () => {
     expect(normalizeIssueExecutionPolicy({ stages: [] })).toBeNull();
+  });
+});
+
+describe("shouldSkipStrandedSweep", () => {
+  const paused = { executionPolicy: { autoDispatchPaused: true } };
+  const notPaused = { executionPolicy: null };
+
+  it("never skips a card that is not paused, whatever its last run did", () => {
+    for (const status of ["succeeded", "failed", "running", null, undefined]) {
+      expect(shouldSkipStrandedSweep({ issue: notPaused, latestRunStatus: status })).toBe(false);
+    }
+  });
+
+  it("skips a paused card whose last run finished cleanly", () => {
+    expect(shouldSkipStrandedSweep({ issue: paused, latestRunStatus: "succeeded" })).toBe(true);
+  });
+
+  it("skips a paused card that has never run — nothing crashed, so this is a fresh dispatch", () => {
+    expect(shouldSkipStrandedSweep({ issue: paused, latestRunStatus: null })).toBe(true);
+    expect(shouldSkipStrandedSweep({ issue: paused, latestRunStatus: undefined })).toBe(true);
+  });
+
+  it("still recovers a paused card whose last run died", () => {
+    for (const status of ["interrupted", "failed", "cancelled", "timed_out"]) {
+      expect(shouldSkipStrandedSweep({ issue: paused, latestRunStatus: status })).toBe(false);
+    }
   });
 });

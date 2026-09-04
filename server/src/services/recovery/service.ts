@@ -43,7 +43,7 @@ import { instanceSettingsService } from "../instance-settings.js";
 import { issueRecoveryActionService } from "../issue-recovery-actions.js";
 import { issueTreeControlService } from "../issue-tree-control.js";
 import { TERMINAL_HEARTBEAT_RUN_STATUSES, issueService } from "../issues.js";
-import { isAutoDispatchPaused } from "../auto-dispatch-pause.js";
+import { shouldSkipStrandedSweep } from "../auto-dispatch-pause.js";
 import {
   applyIssueMonitorPolicyTransition,
   normalizeIssueExecutionPolicy,
@@ -4121,7 +4121,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       // back without clearing the assignee (which also carries "whose work is
       // this" for progress accounting). Crash recovery is deliberately left
       // through: an unsuccessful terminal run is the reason this sweep exists.
-      if (isAutoDispatchPaused(issue) && !isUnsuccessfulTerminalIssueRun(latestRun)) {
+      if (shouldSkipStrandedSweep({ issue, latestRunStatus: latestRun?.status })) {
         result.skipped += 1;
         continue;
       }
