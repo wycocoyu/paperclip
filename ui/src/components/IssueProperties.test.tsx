@@ -15,6 +15,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue, IssueDocument } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IssueProperties } from "./IssueProperties";
+import { PanelProvider } from "../context/PanelContext";
 import { queryKeys } from "../lib/queryKeys";
 
 const mockAgentsApi = vi.hoisted(() => ({
@@ -445,7 +446,12 @@ function renderPropertiesWithQueryClient(container: HTMLDivElement, props: Compo
   act(() => {
     root.render(
       <QueryClientProvider client={queryClient}>
-        <IssueProperties {...props} />
+        {/* IssueProperties calls usePanel() unconditionally, so without this
+            provider every render in this file throws and the assertions below
+            pass or fail against an empty container. */}
+        <PanelProvider>
+          <IssueProperties {...props} />
+        </PanelProvider>
       </QueryClientProvider>,
     );
   });
@@ -649,6 +655,81 @@ describe("IssueProperties", () => {
       expect(container.textContent).toContain("feature/wy/MUL-1/demo");
       expect(container.textContent).not.toContain("未登记");
     });
+
+    act(() => root.unmount());
+  });
+
+  // The server always normalises a policy into the full shape, so the fixture
+  // has to carry stages too — a bare { autoDispatchPaused } is not a policy the
+  // UI would ever receive.
+  const pausedPolicy = (): IssueExecutionPolicy => ({
+    mode: "normal",
+    commentRequired: true,
+    stages: [],
+    autoDispatchPaused: true,
+  });
+
+  it("keeps the 自动派发 row off a card that is not paused", async () => {
+    const root = renderProperties(container, {
+      issue: createIssue(),
+      childIssues: [],
+      onUpdate: vi.fn(),
+      inline: true,
+    });
+    await flush();
+
+    await waitForAssertion(() => {
+      // Not-paused is the normal case: a row saying nothing is switched off
+      // would be noise on every card (MUL-538).
+      expect(container.querySelector('[data-property-label="自动派发"]')).toBeNull();
+    });
+
+    act(() => root.unmount());
+  });
+
+  it("shows the 自动派发 row on a paused card so the idle assignee reads as deliberate", async () => {
+    const root = renderProperties(container, {
+      issue: createIssue({ executionPolicy: pausedPolicy() }),
+      childIssues: [],
+      onUpdate: vi.fn(),
+      inline: true,
+    });
+    await flush();
+
+    await waitForAssertion(() => {
+      expect(container.querySelector('[data-property-label="自动派发"]')).not.toBeNull();
+      expect(container.textContent).toContain("已暂停");
+    });
+
+    act(() => root.unmount());
+  });
+
+  it("un-pauses through the merge-safe field, not by rewriting executionPolicy", async () => {
+    const onUpdate = vi.fn();
+    const root = renderProperties(container, {
+      issue: createIssue({ executionPolicy: pausedPolicy() }),
+      childIssues: [],
+      onUpdate,
+      inline: true,
+    });
+    await flush();
+
+    await waitForAssertion(() => {
+      expect(container.querySelector('[data-property-label="自动派发"]')).not.toBeNull();
+    });
+
+    const row = container
+      .querySelector('[data-property-label="自动派发"]')
+      ?.closest('[data-property-row="true"]');
+    const toggle = row?.querySelector("button, [role=switch], input") as HTMLElement | null;
+    expect(toggle).not.toBeNull();
+    act(() => {
+      toggle!.click();
+    });
+
+    // Writing executionPolicy wholesale would drop the card's stages and
+    // monitor, so the toggle has to go through the single-field path.
+    expect(onUpdate).toHaveBeenCalledWith({ autoDispatchPaused: false });
 
     act(() => root.unmount());
   });
