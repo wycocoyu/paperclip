@@ -875,19 +875,19 @@ export function registerIssueCommands(program: Command): void {
           const drivingSession = resolveSessionIdVerbose(opts.session);
           const drivingPatch: Record<string, unknown> = {};
           // Structured branch column (MUL-59): the branch used to live only in
-          // the opening comment's prose.
+          // the opening comment's prose. MUL-558: the PATCH must not depend on
+          // a session id — Zcode/Qoder terminals publish none, which left
+          // workingBranch null and the 代码卡 close-gate's signal dark.
           drivingPatch.workingBranch = opts.branch;
-          if (drivingSession) {
-            drivingPatch.drivingSession = drivingSession;
-            // /agents/me only answers for an agent key, and an agent key cannot
-            // PATCH an in-progress issue without a run — so a board-authenticated
-            // terminal falls back to the agent id it was configured with. Without
-            // this, Driving stays "Unclaimed" on every card a terminal starts.
-            const me = await ctx.api.get<{ id: string } | null>(apiPath`/api/agents/me`).catch(() => null);
-            const drivingAgentId = me?.id ?? process.env.PAPERCLIP_AGENT_ID?.trim() ?? null;
-            if (drivingAgentId) drivingPatch.drivingAgentId = drivingAgentId;
-            updated = await ctx.api.patch<Issue>(apiPath`/api/issues/${issue.id}`, drivingPatch);
-          }
+          // /agents/me only answers for an agent key, and an agent key cannot
+          // PATCH an in-progress issue without a run — so a board-authenticated
+          // terminal falls back to the agent id it was configured with. Without
+          // this, Driving stays "Unclaimed" on every card a terminal starts.
+          const me = await ctx.api.get<{ id: string } | null>(apiPath`/api/agents/me`).catch(() => null);
+          const drivingAgentId = me?.id ?? process.env.PAPERCLIP_AGENT_ID?.trim() ?? null;
+          if (drivingAgentId) drivingPatch.drivingAgentId = drivingAgentId;
+          if (drivingSession) drivingPatch.drivingSession = drivingSession;
+          updated = await ctx.api.patch<Issue>(apiPath`/api/issues/${issue.id}`, drivingPatch);
           if (!drivingPatch.drivingAgentId) {
             process.stderr.write("warning: no agent identity for Driving — set PAPERCLIP_AGENT_ID or run with an agent key\n");
           }

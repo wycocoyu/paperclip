@@ -259,3 +259,34 @@ describe("MUL-555 · preflight 内联到 issue update --status", () => {
 function jsonResponse(body: unknown, init: ResponseInit = { status: 200 }): Response {
   return new Response(JSON.stringify(body), init);
 }
+
+describe("MUL-558 · start 无 session 也必须登记分支", () => {
+  let logged: string[];
+  let errored: string[];
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    logged = [];
+    errored = [];
+    delete process.env.PAPERCLIP_API_KEY;
+    delete process.env.PAPERCLIP_API_URL;
+    delete process.env.PAPERCLIP_SESSION_ID;
+    vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void logged.push(a.join(" ")));
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void errored.push(a.join(" ")));
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("Zcode/Qoder 不发布 session，start 仍要把 workingBranch 写进卡（代码卡门禁的信号源）", async () => {
+    const fetchMock = routingFetch({
+      [`GET ${BASE}/api/issues/MUL-999`]: issue({ status: "in_progress" }),
+      [`GET ${BASE}/api/agents/me`]: { id: AGENT_ID },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await run(["issue", "start", "MUL-999", "--branch", "feature/wy/MUL-999/x"]);
+
+    const patches = patchBodies(fetchMock);
+    expect(patches.some((b) => b.workingBranch === "feature/wy/MUL-999/x")).toBe(true);
+  });
+});
