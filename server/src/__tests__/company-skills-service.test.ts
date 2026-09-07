@@ -473,6 +473,40 @@ describeEmbeddedPostgres("companySkillService.list", () => {
     });
   });
 
+  it("keeps the client sidecar out of the inventory and out of version snapshots", async () => {
+    const companyId = randomUUID();
+    const skillDir = await createManagedSkillDir(companyId, "sidecar-import-skill-");
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: Team-Sidecar Import Skill\n---\n\n# Team-Sidecar Import Skill\n",
+      "utf8",
+    );
+    // A directory that was materialized by the CLI carries this file; it is
+    // client bookkeeping, and shipping it back as content makes every pull
+    // report phantom local drift.
+    await fs.writeFile(
+      path.join(skillDir, ".paperclip-skill.json"),
+      JSON.stringify({ skillId: randomUUID(), localHash: "stale" }),
+      "utf8",
+    );
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const imported = await svc.importFromSource(companyId, skillDir);
+    const skillId = imported.imported[0]?.id;
+    if (!skillId) throw new Error("Expected imported skill id");
+
+    const stored = await svc.getById(companyId, skillId);
+    expect(stored?.fileInventory.map((entry) => entry.path)).toEqual(["SKILL.md"]);
+
+    const version = await svc.createVersion(companyId, skillId, { label: "v1" }, { type: "user", userId: "board" });
+    expect(version.fileInventory.map((entry) => entry.path)).toEqual(["SKILL.md"]);
+  });
+
   it("does not retouch unchanged local-path imports", async () => {
     const companyId = randomUUID();
     const skillDir = await createManagedSkillDir(companyId, "idempotent-import-skill-");

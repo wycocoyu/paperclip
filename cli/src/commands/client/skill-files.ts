@@ -1,10 +1,17 @@
+import { SKILL_SIDECAR_FILENAME } from "@paperclipai/shared";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export const SKILL_SIDECAR = ".paperclip-skill.json";
+export const SKILL_SIDECAR = SKILL_SIDECAR_FILENAME;
 
 const IGNORED_SKILL_FILES: ReadonlySet<string> = new Set([SKILL_SIDECAR]);
+
+// The sidecar is our own bookkeeping, so it counts as neither local content nor
+// remote content. Callers on both sides of the comparison filter through here.
+export function isIgnoredSkillFile(relativePath: string): boolean {
+  return IGNORED_SKILL_FILES.has(relativePath);
+}
 
 export function hashFileMap(files: Map<string, string>): string {
   const hash = createHash("sha256");
@@ -36,7 +43,7 @@ async function collectSkillDirFiles(
     .catch(() => []);
   for (const entry of entries) {
     const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-    if (IGNORED_SKILL_FILES.has(relativePath)) continue;
+    if (isIgnoredSkillFile(relativePath)) continue;
     if (entry.isDirectory()) {
       await collectSkillDirFiles(root, relativePath, files);
       continue;

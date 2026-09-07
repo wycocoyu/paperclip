@@ -93,6 +93,7 @@ import type {
   IssueDocument,
 } from "@paperclipai/shared";
 import {
+  SKILL_SIDECAR_FILENAME,
   isUuidLike,
   joinFrontmatterBlock,
   normalizeAgentUrlKey,
@@ -1127,6 +1128,7 @@ async function walkLocalFiles(root: string, current: string, out: string[]) {
   const entries = await fs.readdir(current, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name === ".git" || entry.name === "node_modules") continue;
+    if (entry.name === SKILL_SIDECAR_FILENAME) continue;
     const absolutePath = path.join(current, entry.name);
     if (entry.isDirectory()) {
       await walkLocalFiles(root, absolutePath, out);
@@ -1626,7 +1628,8 @@ async function readUrlSkillImports(
     const allPaths = (tree.tree ?? [])
       .filter((entry) => entry.type === "blob")
       .map((entry) => entry.path)
-      .filter((entry): entry is string => typeof entry === "string");
+      .filter((entry): entry is string => typeof entry === "string")
+      .filter((entry) => path.posix.basename(entry) !== SKILL_SIDECAR_FILENAME);
     const basePrefix = parsed.basePath ? `${parsed.basePath.replace(/^\/+|\/+$/g, "")}/` : "";
     const scopedPaths = basePrefix
       ? allPaths.filter((entry) => entry.startsWith(basePrefix))
@@ -2440,6 +2443,7 @@ async function collectSkillFileBytes(skillDir: string): Promise<{
   async function visit(current: string) {
     const entries = await fs.readdir(current, { withFileTypes: true }).catch(() => []);
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.name === SKILL_SIDECAR_FILENAME) continue;
       const absolutePath = path.resolve(current, entry.name);
       const relativePath = normalizePortablePath(path.relative(root, absolutePath));
       if (!relativePath || relativePath.split("/").includes("..") || path.isAbsolute(relativePath)) {

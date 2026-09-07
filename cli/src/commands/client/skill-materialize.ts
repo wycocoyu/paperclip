@@ -10,6 +10,7 @@ import {
   SKILL_SIDECAR,
   hashFileMap,
   isDirectory,
+  isIgnoredSkillFile,
   parentDirOf,
   readSkillDirFiles,
 } from "./skill-files.js";
@@ -134,6 +135,9 @@ async function fetchSkillFiles(
   )[0];
   const files = new Map<string, string>();
   for (const entry of latest?.fileInventory ?? []) {
+    // Snapshots taken before the server stopped scanning it still carry the
+    // sidecar; treating it as content would recreate the drift it caused.
+    if (isIgnoredSkillFile(entry.path)) continue;
     if (typeof entry.content === "string") {
       files.set(entry.path, entry.content);
       continue;
@@ -228,7 +232,7 @@ async function writeSkillFiles(
   }
   const removed: string[] = [];
   for (const filePath of trackedPaths) {
-    if (remoteFiles.has(filePath)) continue;
+    if (remoteFiles.has(filePath) || isIgnoredSkillFile(filePath)) continue;
     await rm(join(skillDir, filePath), { force: true });
     removed.push(filePath);
     await removeEmptyAncestors(skillDir, parentDirOf(filePath));
@@ -253,6 +257,10 @@ async function detectLocalDrift(
   remoteFiles: Map<string, string>,
 ): Promise<string | null> {
   const onDisk = await readSkillDirFiles(skillDir);
+  // Disk that already equals the remote is not a local edit, whatever the
+  // sidecar hash claims — an older sidecar could have hashed files we no longer
+  // read back, so the recorded hash can be wrong while the bytes are identical.
+  if (hashFileMap(onDisk) === hashFileMap(remoteFiles)) return null;
   // Sidecars written before file tracking only ever knew the remote inventory,
   // so compare within that set rather than flagging pre-existing extras.
   const tracked = sidecar.files ?? [...remoteFiles.keys()];
