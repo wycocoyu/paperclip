@@ -108,6 +108,7 @@ interface IssueUpdateOptions extends BaseClientOptions {
 interface IssueClaimOptions extends BaseClientOptions {
   note?: string;
   status?: string;
+  force?: boolean;
 }
 
 interface IssueStartOptions extends BaseClientOptions {
@@ -117,6 +118,7 @@ interface IssueStartOptions extends BaseClientOptions {
   dependsOn?: string;
   note?: string;
   session?: string;
+  force?: boolean;
 }
 
 interface IssueQaOptions extends BaseClientOptions {
@@ -259,6 +261,46 @@ function agentIdResolver(ctx: ResolvedClientContext, companyId: string | undefin
 
 /** `--option "id|Label"` — the pipe keeps the flag typable without shell-quoting JSON. */
 
+
+/**
+ * The settled statuses, same set the server uses everywhere else
+ * (`BLOCKED_INBOX_TERMINAL_STATUSES` and friends in services/issues.ts).
+ * `in_review` and `blocked` are deliberately not here: claiming out of review
+ * and unblocking are both normal forward moves.
+ */
+const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
+
+/**
+ * 终态卡写保护 (MUL-555).
+ *
+ * `claim` and `start` both PATCH status to in_progress unconditionally. On a
+ * finished card that silently rewrites a settled outcome, and the status flip
+ * plus the Driving overwrite are not undoable — so this refuses before the
+ * first write instead of reporting after it. Team Rules said the same thing in
+ * prose ("对已 done 的卡不要补 claim"); prose is what a reader can skip.
+ *
+ * Reopening stays possible and stays deliberate: it is spelled differently
+ * (`issue update --status todo`), and `--force` is here for the case where
+ * pushing the status really is what the caller means.
+ */
+function assertNotTerminalForWrite(
+  issue: { id: string; identifier?: string | null; title?: string | null; status?: string | null },
+  command: "claim" | "start",
+  force: boolean | undefined,
+): void {
+  if (force) return;
+  const status = issue.status ?? "";
+  if (!TERMINAL_ISSUE_STATUSES.has(status)) return;
+  const ref = issue.identifier ?? issue.id;
+  throw new Error(
+    [
+      `issue_invalid_state_transition：${ref}「${issue.title ?? "(无标题)"}」已是 ${status}，${command} 会把它强推回 in_progress。`,
+      `  · 这一步不可逆：状态与 Driving 都会被覆盖，卡上留下改过的痕迹`,
+      `  · 要重开这张卡：paperclipai issue update ${ref} --status todo，然后再 claim`,
+      `  · 确实就是要强推：同样的命令加 --force`,
+    ].join("\n"),
+  );
+}
 
 /** Shape of `GET /api/issues/:id/preflight` (MUL-448). */
 type IssuePreflightReport = {
@@ -708,6 +750,18 @@ export function registerIssueCommands(program: Command): void {
             const existing = await ctx.api.get<Issue>(apiPath`/api/issues/${issueId}`).catch(() => null);
             if (existing) await autoClaimIfUnclaimed(ctx, existing);
           }
+          // preflight 内联 (MUL-555): the gates fire on the way into in_review
+          // and done, and `issue preflight` existed but had to be remembered.
+          // Printing it here, before the write, means forgetting costs nothing
+          // — the same itemized list shows up in place either way. Best-effort
+          // on stderr, and skipped under --json so machine consumers still get
+          // clean JSON on stdout (same shape as the claim side, MUL-448).
+          if (!ctx.json && (opts.status === "in_review" || opts.status === "done")) {
+            const report = await ctx.api
+              .get<IssuePreflightReport>(apiPath`/api/issues/${issueId}/preflight`)
+              .catch(() => null);
+            if (report) console.error(`${formatPreflight(report)}\n`);
+          }
           const updated = await ctx.api.patch<Issue & { comment?: IssueComment | null }>(apiPath`/api/issues/${issueId}`, payload);
           printOutput(updated, { json: ctx.json });
         } catch (err) {
@@ -723,11 +777,13 @@ export function registerIssueCommands(program: Command): void {
       .argument("<issueId>", "Issue ID or identifier")
       .option("--note <text>", "Extra opening note text")
       .option("--status <status>", "Target status (default in_progress)", "in_progress")
+      .option("--force", "Claim even when the card is already done or cancelled")
       .action(async (issueId: string, opts: IssueClaimOptions) => {
         try {
           const ctx = resolveCommandContext(opts);
           const issue = await ctx.api.get<Issue>(apiPath`/api/issues/${issueId}`);
           if (!issue) throw new Error(`Issue not found: ${issueId}`);
+          assertNotTerminalForWrite(issue, "claim", opts.force);
           let updated: Issue | null = issue;
           // 接卡即开工（user 2026-08-27）: Driving records the claiming agent.
           // Sub-agents it dispatches are its implementation detail and are not
@@ -750,14 +806,18 @@ export function registerIssueCommands(program: Command): void {
           if (issue.status !== opts.status) {
             updated = await ctx.api.patch<Issue>(apiPath`/api/issues/${issue.id}`, { status: opts.status });
           }
-          const lines = [`接卡：${issue.identifier} → ${opts.status}（by claim command）`];
+          // 标题回显 (MUL-555): the card number alone cannot be checked by eye.
+          // A stale number guessed from an old list is a valid number belonging
+          // to someone else's card, so the only thing that makes a mis-claim
+          // visible at the moment it happens is the title (MUL-98).
+          const lines = [`接卡：${issue.identifier}「${issue.title ?? "(无标题)"}」 → ${opts.status}（by claim command）`];
           if (drivingAgentId || drivingSession) lines.push(`Driving：${drivingAgentId ?? "?"}${drivingSession ? ` · 会话 ${drivingSession}` : ""}`);
           if (opts.note) lines.push(opts.note);
           await ctx.api.post(apiPath`/api/issues/${issue.id}/comments`, {
             body: lines.join("\n"),
             presentation: { kind: "progress_note", tone: "info" },
           });
-          printOutput({ identifier: issue.identifier, status: updated?.status ?? opts.status, drivingAgentId, drivingSession }, { json: ctx.json });
+          printOutput({ identifier: issue.identifier, title: issue.title, status: updated?.status ?? opts.status, drivingAgentId, drivingSession }, { json: ctx.json });
           // 门禁前置可发现 (MUL-448): the moment the card is taken is the
           // moment its debts are worth knowing — printing them at close time
           // is what cost the round trip. Best-effort on stderr so it never
@@ -788,11 +848,13 @@ export function registerIssueCommands(program: Command): void {
         "--session <id>",
         "Driving session to record on the card — who is working it now (one slot, overwritten per start). Defaults to whatever this host terminal publishes; Zcode and Qoder publish nothing, so pass it there",
       )
+      .option("--force", "Start even when the card is already done or cancelled")
       .action(async (issueId: string, opts: IssueStartOptions) => {
         try {
           const ctx = resolveCommandContext(opts);
           const issue = await ctx.api.get<Issue>(apiPath`/api/issues/${issueId}`);
           if (!issue) throw new Error(`Issue not found: ${issueId}`);
+          assertNotTerminalForWrite(issue, "start", opts.force);
           let updated: Issue | null = issue;
           if (issue.status !== "in_progress") {
             try {
@@ -829,7 +891,7 @@ export function registerIssueCommands(program: Command): void {
           if (!drivingPatch.drivingAgentId) {
             process.stderr.write("warning: no agent identity for Driving — set PAPERCLIP_AGENT_ID or run with an agent key\n");
           }
-          const lines = [`开工：${issue.identifier}，工作分支：${opts.branch}`];
+          const lines = [`开工：${issue.identifier}「${issue.title ?? "(无标题)"}」，工作分支：${opts.branch}`];
           if (drivingSession) lines.push(`主审会话：${drivingSession}`);
           if (opts.worktree) lines.push(`工作树：${opts.worktree}`);
           if (opts.base) lines.push(`基线：${opts.base}`);
@@ -839,7 +901,7 @@ export function registerIssueCommands(program: Command): void {
             body: lines.join("\n"),
             presentation: { kind: "progress_note", tone: "info" },
           });
-          printOutput({ identifier: issue.identifier, status: updated?.status ?? "in_progress", branch: opts.branch, drivingSession }, { json: ctx.json });
+          printOutput({ identifier: issue.identifier, title: issue.title, status: updated?.status ?? "in_progress", branch: opts.branch, drivingSession }, { json: ctx.json });
         } catch (err) {
           handleCommandError(err);
         }
