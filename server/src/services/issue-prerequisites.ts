@@ -20,10 +20,26 @@ import { isSettledDecisionLogEntry, parseDecisionLogEntries } from "@paperclipai
  * Missing pieces are returned as lines that each name the fix, so the 422
  * tells the caller exactly what to put where instead of a bare "not allowed".
  */
+/**
+ * test-baseline / test-result 的结构化失败清单（MUL-558 基线对比门）。
+ * 约定两份文档同构：JSON {"command": string, "failures": string[]}。
+ * 解析不了返回 null——按「结构不对」拦下并提示重写，不做容错猜测。
+ */
+function parseTestFailures(body: string | null | undefined): string[] | null {
+  if (body == null) return null;
+  try {
+    const parsed = JSON.parse(body) as { failures?: unknown };
+    if (!Array.isArray(parsed?.failures)) return null;
+    return parsed.failures.map((f) => String(f));
+  } catch {
+    return null;
+  }
+}
+
 export async function missingIssueClosePrerequisites(
   db: Pick<Db, "select">,
   companyId: string,
-  issue: { id: string; description: string | null },
+  issue: { id: string; description: string | null; workingBranch?: string | null },
 ): Promise<string[]> {
   const missing: string[] = [];
 
@@ -38,7 +54,7 @@ export async function missingIssueClosePrerequisites(
     .where(and(
       eq(issueDocuments.companyId, companyId),
       eq(issueDocuments.issueId, issue.id),
-      inArray(issueDocuments.key, ["requirements", "tech-proposal", "decision-log"]),
+      inArray(issueDocuments.key, ["requirements", "tech-proposal", "decision-log", "test-baseline", "test-result"]),
     ));
   const keys = new Set(docRows.map((row) => row.key));
   if (!keys.has("requirements")) {
@@ -46,6 +62,40 @@ export async function missingIssueClosePrerequisites(
   }
   if (!keys.has("tech-proposal")) {
     missing.push("缺「技术方案」文档——issue document:put <卡> tech-proposal --body-file 方案.md");
+  }
+
+  // 门禁 A（MUL-558）：代码卡的验证证据——只判在不在，不判真假。
+  // 代码卡 = 登记过工作分支（issue start 落 workingBranch）；纯调研/文字卡不检查。
+  const techProposalBody = docRows.find((row) => row.key === "tech-proposal")?.body ?? "";
+  if (issue.workingBranch && keys.has("tech-proposal")) {
+    const hasCommandBlock = techProposalBody.includes("```");
+    const mentionsVerification = /验证|verification/i.test(techProposalBody);
+    if (!hasCommandBlock || !mentionsVerification) {
+      missing.push("代码卡（已登记分支）的 tech-proposal 缺验证证据——正文须含「验证」字样与至少一个命令/输出代码块（只判在不在，不判真假）——issue document:put <卡> tech-proposal --body-file 方案.md 补「验证方式」节并贴命令输出");
+    }
+  }
+
+  // 门禁 B（MUL-558）：基线对比，opt-in。开工时写了 test-baseline 才启用：
+  // 收卡须有同构 test-result，且新增失败（result − baseline）为空——拿掉
+  // 「这是历史问题」的解释权。没写 baseline 的卡不受限（快车道）。
+  const baselineBody = docRows.find((row) => row.key === "test-baseline")?.body;
+  if (baselineBody != null) {
+    const resultBody = docRows.find((row) => row.key === "test-result")?.body;
+    if (resultBody == null) {
+      missing.push("这张卡开工时登记了 test-baseline，收卡须有同构 test-result 对照——issue document:put <卡> test-result --body-file 结果.json（内容 {\"command\":\"…\",\"failures\":[…]}）");
+    } else {
+      const baseline = parseTestFailures(baselineBody);
+      const result = parseTestFailures(resultBody);
+      if (!baseline || !result) {
+        missing.push("test-baseline / test-result 须为 JSON {\"command\",\"failures\":[…]}——现在至少一份解析不了，document:put 重写为结构化 JSON 再收卡");
+      } else {
+        const baselineSet = new Set(baseline);
+        const newFailures = result.filter((f) => !baselineSet.has(f));
+        if (newFailures.length > 0) {
+          missing.push(`基线对比：${newFailures.length} 个新增失败（结果有、基线无）——${newFailures.slice(0, 3).join("；")}${newFailures.length > 3 ? " 等" : ""}。修掉再收，或确属既有问题则开工时重登基线：issue document:put <卡> test-baseline`);
+        }
+      }
+    }
   }
 
   const decisionLogBody = docRows.find((row) => row.key === "decision-log")?.body ?? "";
@@ -236,6 +286,6 @@ export async function issuePreflight(
     startGate: { started: issue.workingBranch != null, workingBranch: issue.workingBranch ?? null },
     glossaryGate: glossaryState,
     coverage:
-      "只覆盖收卡门禁、认领门禁、裁决模式、交接门禁四道。开工登记不是门禁，只随报。文档修订冲突、正文防旧覆盖、决策三段校验等要到写入那一刻才判得出来，blocking 为空不等于一定写得进去。",
+      "只覆盖收卡门禁（含 MUL-558 两道子检查：代码卡验证证据、基线对比，同样随收卡清单报出）、认领门禁、裁决模式、交接门禁四道。开工登记不是门禁，只随报。文档修订冲突、正文防旧覆盖、决策三段校验等要到写入那一刻才判得出来，blocking 为空不等于一定写得进去。",
   };
 }
