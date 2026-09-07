@@ -5,6 +5,7 @@ export default defineConfig({
     projects: [
       "packages/shared",
       "packages/skills-catalog",
+      "packages/skill-materializer",
       "packages/db",
       "packages/adapter-utils",
       "packages/adapters/claude-local",

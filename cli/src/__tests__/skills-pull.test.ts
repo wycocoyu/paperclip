@@ -1,11 +1,11 @@
 import { Command } from "commander";
+import { hashFileMap } from "@paperclipai/skill-materializer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSkillsCommands } from "../commands/client/skills.js";
 import type { ResolvedClientContext } from "../commands/client/common.js";
-import { hashFileMap } from "../commands/client/skill-files.js";
 import {
   materializeCompanySkills,
   readSidecar,

@@ -1,6 +1,7 @@
 import { SKILL_SIDECAR_FILENAME } from "@paperclipai/shared";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 
 export const SKILL_SIDECAR = SKILL_SIDECAR_FILENAME;
@@ -13,7 +14,23 @@ export function isIgnoredSkillFile(relativePath: string): boolean {
   return IGNORED_SKILL_FILES.has(relativePath);
 }
 
-export function hashFileMap(files: Map<string, string>): string {
+// Collapses a snapshot-supplied path to a relative POSIX path that cannot escape
+// the skill directory. Every writer normalizes through here so the server's
+// stored inventory and the CLI's on-disk view key off identical strings.
+export function normalizePortablePath(input: string): string {
+  const parts: string[] = [];
+  for (const segment of input.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "").split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (parts.length > 0) parts.pop();
+      continue;
+    }
+    parts.push(segment);
+  }
+  return parts.join("/");
+}
+
+export function hashFileMap(files: ReadonlyMap<string, string>): string {
   const hash = createHash("sha256");
   for (const filePath of [...files.keys()].sort()) {
     hash.update(filePath);
@@ -68,4 +85,10 @@ export async function isDirectory(target: string): Promise<boolean> {
     .stat(target)
     .then((stats) => stats.isDirectory())
     .catch(() => false);
+}
+
+export function expandHome(value: string): string {
+  if (value === "~") return homedir();
+  if (value.startsWith("~/")) return path.join(homedir(), value.slice(2));
+  return path.resolve(value);
 }

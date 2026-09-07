@@ -1,8 +1,8 @@
 import { removeMaintainerOnlySkillSymlinks } from "@paperclipai/adapter-utils/server-utils";
+import { hashSkillDir, isDirectory } from "@paperclipai/skill-materializer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { hashSkillDir, isDirectory } from "./skill-files.js";
 
 export type TerminalSkillTool = "codex" | "claude" | "kimi" | "zcode" | "custom";
 
