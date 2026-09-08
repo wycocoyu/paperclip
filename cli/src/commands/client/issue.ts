@@ -189,6 +189,10 @@ interface IssueDocumentPutOptions extends BaseClientOptions {
   baseRevisionId?: string;
 }
 
+interface IssueDocumentRevisionsOptions extends BaseClientOptions {
+  rev?: string;
+}
+
 interface IssueDocumentImageOptions extends BaseClientOptions {
   companyId?: string;
   file: string;
@@ -415,6 +419,34 @@ function noteDoneIsPast(status: unknown, json: boolean): void {
 }
 
 /** document 自己不带卡的状态，只能回头取一次 issue。取不到就不提示，读文档本身不受影响。 */
+interface IssueDocumentRevision {
+  id: string;
+  revisionNumber: number;
+  title: string | null;
+  format: string;
+  body: string;
+  changeSummary: string | null;
+  createdByAgentId: string | null;
+  createdByUserId: string | null;
+  createdAt: string;
+}
+
+/** 作者列表里的 agent id 换成名字；查不到就让调用方回落到 id，不因此让整条命令失败。 */
+async function resolveRevisionAuthorNames(
+  ctx: ResolvedClientContext,
+  revisions: IssueDocumentRevision[],
+): Promise<Map<string, string>> {
+  const ids = [...new Set(revisions.map((rev) => rev.createdByAgentId).filter((id): id is string => !!id))];
+  const names = new Map<string, string>();
+  await Promise.all(
+    ids.map(async (id) => {
+      const agent = await ctx.api.get<{ name?: string }>(apiPath`/api/agents/${id}`).catch(() => null);
+      if (agent?.name) names.set(id, agent.name);
+    }),
+  );
+  return names;
+}
+
 async function noteDoneIsPastForIssue(ctx: ResolvedClientContext, issueId: string): Promise<void> {
   if (ctx.json) return;
   const issue = await ctx.api.get<Issue>(apiPath`/api/issues/${issueId}`).catch(() => null);
@@ -2106,14 +2138,59 @@ export function registerIssueCommands(program: Command): void {
   addCommonClientOptions(
     issue
       .command("document:revisions")
-      .description("List issue document revisions")
+      .description("List issue document revisions, or print one revision's full body with --rev")
       .argument("<issueId>", "Issue ID")
       .argument("<key>", "Document key")
-      .action(async (issueId: string, key: string, opts: BaseClientOptions) => {
+      .option("--rev <n>", "Print the full body of this revision number")
+      .action(async (issueId: string, key: string, opts: IssueDocumentRevisionsOptions) => {
         try {
           const ctx = resolveCommandContext(opts);
-          const revisions = await ctx.api.get(apiPath`/api/issues/${issueId}/documents/${key}/revisions`);
-          printOutput(revisions, { json: ctx.json });
+          const revisions =
+            (await ctx.api.get<IssueDocumentRevision[]>(
+              apiPath`/api/issues/${issueId}/documents/${key}/revisions`,
+            )) ?? [];
+
+          if (opts.rev !== undefined) {
+            const wanted = Number(opts.rev);
+            if (!Number.isInteger(wanted)) {
+              throw new Error(`--rev 要一个版本号整数，收到 ${opts.rev}`);
+            }
+            const hit = revisions.find((rev) => rev.revisionNumber === wanted);
+            if (!hit) {
+              const have = revisions.map((rev) => rev.revisionNumber).join(", ");
+              throw new Error(
+                `${key} 没有第 ${wanted} 版${have ? `；现有版本：${have}` : "（这张卡下没有这个文档，用 issue documents 看有哪些）"}`,
+              );
+            }
+            if (ctx.json) {
+              printOutput(hit, { json: true });
+            } else {
+              // 逐字节写正文：console.log 会补一个换行，取回的版本就不再与服务端一致。
+              process.stdout.write(hit.body ?? "");
+            }
+            return;
+          }
+
+          if (ctx.json) {
+            printOutput(revisions, { json: true });
+            return;
+          }
+          if (revisions.length === 0) {
+            console.log(`${key} 没有版本记录（这张卡下可能没有这个文档，用 issue documents 看有哪些）`);
+            return;
+          }
+          const authors = await resolveRevisionAuthorNames(ctx, revisions);
+          console.log(`${key} · ${revisions.length} 版`);
+          for (const rev of revisions) {
+            const author = rev.createdByAgentId
+              ? (authors.get(rev.createdByAgentId) ?? rev.createdByAgentId)
+              : (rev.createdByUserId ?? "-");
+            // 末尾的 id 是 document:restore 要的 revisionId，清单里给出才不用再翻 --json。
+            console.log(
+              `  r${rev.revisionNumber}  ${rev.createdAt}  ${(rev.body ?? "").length} 字  ${author}  ${rev.id}`,
+            );
+            if (rev.changeSummary) console.log(`      ${rev.changeSummary}`);
+          }
         } catch (err) {
           handleCommandError(err);
         }
