@@ -136,6 +136,11 @@ export function configureSkillFanout(next: SkillsTeamProjection | null): void {
   projection = next;
 }
 
+/** Where fan-out projects, for read-only callers that need the same checkout. */
+export function skillFanoutProjection(): SkillsTeamProjection | null {
+  return projection;
+}
+
 /**
  * Test seam mirroring resetWorkspaceRuntimeControlStateForTests: the
  * coordinator owns process-wide state, tests own its lifetime.

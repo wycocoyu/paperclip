@@ -140,6 +140,22 @@ describe("skills usage", () => {
     expect(after.totalCalls).toBe(2);
   });
 
+  it("keeps out-of-window cache entries so a narrow window does not evict a wide one's work", async () => {
+    const old = path.join(home, ".claude", "projects", "-repo", "old.jsonl");
+    await writeJsonl(old, [claudeCall("t1", "team-grilling")], NOW - 20 * DAY);
+
+    const wide = await collectSkillsUsage({ days: 30, cache: true, now: () => NOW });
+    expect(wide.scanned.claude.parsed).toBe(1);
+
+    // A 7-day scan must not see the file, and must not drop its cache entry.
+    const narrow = await collectSkillsUsage({ days: 7, cache: true, now: () => NOW });
+    expect(narrow.totalCalls).toBe(0);
+
+    const again = await collectSkillsUsage({ days: 30, cache: true, now: () => NOW });
+    expect(again.scanned.claude).toEqual({ files: 1, parsed: 0 });
+    expect(again.totalCalls).toBe(1);
+  });
+
   it("reports an unreadable session file instead of counting it as zero calls", async () => {
     const dir = path.join(home, ".claude", "projects", "-repo");
     const file = path.join(dir, "sess.jsonl");
