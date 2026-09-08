@@ -49,6 +49,7 @@ import { AgentIcon } from "./AgentIconPicker";
 import { applyMentionChipDecoration, clearMentionChipDecoration, parseMentionChipHref } from "../lib/mention-chips";
 import { MentionAwareLinkNode, mentionAwareLinkNodeReplacement } from "../lib/mention-aware-link-node";
 import { mentionDeletionPlugin } from "../lib/mention-deletion";
+import { imagePastePlugin } from "../lib/image-paste";
 import { looksLikeMarkdownPaste } from "../lib/markdownPaste";
 import { normalizeMarkdown } from "../lib/normalize-markdown";
 import { unescapeBlockquoteMarkers } from "../lib/blockquote-markdown";
@@ -877,6 +878,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       markdownShortcutPlugin(),
     ];
     if (imageHandler) {
+      // Must sit ahead of pasteNormalizationPlugin and of imagePlugin's own
+      // paste handler: all three claim PASTE_COMMAND at CRITICAL, and Lexical
+      // runs same-priority listeners in registration order.
+      all.unshift(imagePastePlugin());
       // The inline image chip keeps only its remove affordance — no settings
       // dialog, and the X glyph instead of MDXEditor's default trash can.
       all.push(imagePlugin({ imageUploadHandler: imageHandler, disableImageSettingsButton: true }));
