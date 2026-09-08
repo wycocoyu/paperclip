@@ -5142,6 +5142,7 @@ export function IssueDetail({
           const attachment = await uploadAttachment.mutateAsync(file);
           return attachment.contentPath;
         }}
+        onImageClick={handleChatImageClick}
         onVote={async (revisionId, vote, options) => {
           await feedbackVoteMutation.mutateAsync({
             targetType: "issue_document_revision",

@@ -91,10 +91,16 @@ function renderFoldableBody(
   body: string,
   className?: string,
   externalReferences?: MarkdownExternalReferenceMap,
+  onImageClick?: (src: string) => void,
 ) {
   return (
     <FoldCurtain>
-      <MarkdownBody className={className} softBreaks={false} externalReferences={externalReferences}>
+      <MarkdownBody
+        className={className}
+        softBreaks={false}
+        externalReferences={externalReferences}
+        onImageClick={onImageClick}
+      >
         {body}
       </MarkdownBody>
     </FoldCurtain>
@@ -235,6 +241,7 @@ export function IssueDocumentsSection({
   feedbackTermsUrl = null,
   mentions,
   imageUploadHandler,
+  onImageClick,
   onVote,
   extraActions,
   agentMap,
@@ -253,6 +260,8 @@ export function IssueDocumentsSection({
   feedbackTermsUrl?: string | null;
   mentions?: MentionOption[];
   imageUploadHandler?: (file: File) => Promise<string>;
+  /** Click-to-enlarge for images rendered in read-only document bodies. */
+  onImageClick?: (src: string) => void;
   onVote?: (
     revisionId: string,
     vote: FeedbackVoteValue,
@@ -980,7 +989,7 @@ export function IssueDocumentsSection({
             </Badge>
           </div>
           <div className={documentBodyPaddingClassName}>
-            {renderFoldableBody(documentSubject.legacyPlanDocument.body, documentBodyContentClassName, externalReferences)}
+            {renderFoldableBody(documentSubject.legacyPlanDocument.body, documentBodyContentClassName, externalReferences, onImageClick)}
           </div>
         </div>
       ) : null}
@@ -1272,7 +1281,7 @@ export function IssueDocumentsSection({
                           {!isPlanKey(doc.key) && activeConflict.serverDocument.title ? (
                             <p className="mb-2 text-sm font-medium">{activeConflict.serverDocument.title}</p>
                           ) : null}
-                          {renderFoldableBody(activeConflict.serverDocument.body, "text-sm leading-7", externalReferences)}
+                          {renderFoldableBody(activeConflict.serverDocument.body, "text-sm leading-7", externalReferences, onImageClick)}
                         </div>
                       )}
                     </div>
@@ -1294,7 +1303,7 @@ export function IssueDocumentsSection({
                   >
                     {(() => {
                       const renderedDocumentBody = isHistoricalPreview ? (
-                        renderFoldableBody(displayedBody, documentBodyContentClassName, externalReferences)
+                        renderFoldableBody(displayedBody, documentBodyContentClassName, externalReferences, onImageClick)
                       ) : activeDraft ? (
                         <MarkdownEditor
                           value={displayedBody}
@@ -1316,7 +1325,7 @@ export function IssueDocumentsSection({
                           onSubmit={() => void commitDraft(activeDraft ?? draft, { clearAfterSave: false, trackAutosave: true })}
                         />
                       ) : (
-                        renderFoldableBody(displayedBody, documentBodyContentClassName, externalReferences)
+                        renderFoldableBody(displayedBody, documentBodyContentClassName, externalReferences, onImageClick)
                       );
 
                       return documentSubject.annotations ? (

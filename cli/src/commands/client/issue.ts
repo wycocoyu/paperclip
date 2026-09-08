@@ -189,6 +189,14 @@ interface IssueDocumentPutOptions extends BaseClientOptions {
   baseRevisionId?: string;
 }
 
+interface IssueDocumentImageOptions extends BaseClientOptions {
+  companyId?: string;
+  file: string;
+  caption?: string;
+  title?: string;
+  changeSummary?: string;
+}
+
 interface IssueAttachmentUploadOptions extends BaseClientOptions {
   companyId?: string;
   file: string;
@@ -1495,50 +1503,70 @@ export function registerIssueCommands(program: Command): void {
         try {
           const ctx = resolveCommandContext(opts);
           const body = opts.bodyFile ? await readFile(opts.bodyFile, "utf8") : opts.body;
-          // 读卡提前到这里只为拿 identifier 补默认标题。它是 GET 不是认领，认领仍在
-          // 模板校验之后，顺序没变。
-          const existing = await ctx.api.get<Issue>(apiPath`/api/issues/${issueId}`).catch(() => null);
-          const payload = upsertIssueDocumentSchema.parse({
-            title: opts.title?.trim() || defaultDocumentTitle(key, existing?.identifier) || undefined,
+          const doc = await upsertIssueDocument(ctx, issueId, key, {
+            title: opts.title,
             format: opts.format,
             body,
             changeSummary: opts.changeSummary,
             baseRevisionId: opts.baseRevisionId,
           });
-          const path = apiPath`/api/issues/${issueId}/documents/${key}`;
-          // 模板校验排在认领之前：被拒的写入不该留下一次认领。
-          if (key.trim().toLowerCase() === "decision-log") {
-            // 上一版正文只为「只查这次动过的条目」而读：继承来的不合规条目不该
-            // 挡住后来人。第一次建文档撞 404，当空串走全查。
-            const prev = await ctx.api.get<{ body?: string }>(path).catch(() => null);
-            const templateError = decisionLogTemplateError(prev?.body ?? "", payload.body ?? "");
-            if (templateError) throw new Error(templateError);
-          }
-          // 认领门禁扩面 (MUL-443): writing a document is taking the card, so
-          // the CLI takes it rather than making the caller discover the 409.
-          if (existing) await autoClaimIfUnclaimed(ctx, existing);
-          let doc: unknown;
-          try {
-            doc = await ctx.api.put(path, payload);
-          } catch (err) {
-            // 机械门禁自修 (MUL-453): "this document already exists, name the
-            // revision you are editing" is a fact the CLI can look up, not a
-            // decision the caller has to make, so it looks it up. The server
-            // hands the current revision back in the rejection precisely so
-            // this is possible.
-            //
-            // Only the missing-id case retries. A STALE id means somebody
-            // else's revision landed in between, and blindly re-basing would
-            // erase their edit — that one stays the caller's call.
-            const revisionId = missingBaseRevisionId(err);
-            if (!revisionId) throw err;
-            doc = await ctx.api.put(path, { ...payload, baseRevisionId: revisionId });
-          }
           printOutput(doc, { json: ctx.json });
         } catch (err) {
           handleCommandError(err);
         }
       }),
+  );
+
+  addCommonClientOptions(
+    issue
+      .command("document:image")
+      .description("Upload an image and append it to an issue document")
+      .argument("<issueId>", "Issue ID")
+      .argument("<key>", "Document key")
+      .requiredOption("--file <path>", "Image file path (png/jpg/webp/gif)")
+      .option("-C, --company-id <id>", "Company ID")
+      .option("--caption <text>", "Alt text (defaults to the file name)")
+      .option("--title <text>", "Document title (only used when the document is created)")
+      .option("--change-summary <text>", "Change summary")
+      .action(async (issueId: string, key: string, opts: IssueDocumentImageOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts, { requireCompany: true });
+          if (!IMAGE_FILE_EXTENSION_RE.test(opts.file)) {
+            throw new Error("document:image 只收 png/jpg/webp/gif；其他文件走 issue attachment:upload");
+          }
+          // 先传文件再动文档：传坏了文档保持原样。走附件端点而不是纯 asset，
+          // 图片同时挂到卡上（附件列表可见），文档里嵌 asset 的规范 URL。
+          const uploaded = (await uploadAttachment(ctx.api.apiBase, ctx.api.apiKey, {
+            companyId: ctx.companyId ?? "",
+            issueId,
+            filePath: opts.file,
+            runId: ctx.api.runId,
+          })) as { assetId?: string; contentType?: string | null; originalFilename?: string | null } | null;
+          if (!uploaded?.assetId) {
+            throw new Error("上传成功但响应缺 assetId——文档未改动，文件应已挂在卡上，用 issue attachments 查看");
+          }
+          if (!(uploaded.contentType ?? "").startsWith("image/")) {
+            throw new Error(`只能嵌图片，服务端判定为 ${uploaded.contentType ?? "unknown"}——文档未改动，文件已作为附件挂在卡上`);
+          }
+          const caption = (opts.caption?.trim() || uploaded.originalFilename || "image").replace(/[[\]]/g, "");
+          const src = `/api/assets/${uploaded.assetId}/content`;
+          const imageLine = `![${caption}](${src})`;
+          const path = apiPath`/api/issues/${issueId}/documents/${key}`;
+          const prev = await ctx.api.get<{ body?: string }>(path).catch(() => null);
+          const prevBody = (prev?.body ?? "").replace(/\s+$/, "");
+          const body = prevBody ? `${prevBody}\n\n${imageLine}\n` : `${imageLine}\n`;
+          const doc = await upsertIssueDocument(ctx, issueId, key, {
+            title: opts.title,
+            body,
+            changeSummary: opts.changeSummary ?? `append 图片：${caption}`,
+          });
+          if (!ctx.json) console.error(`已上传并嵌入 ${src}`);
+          printOutput(doc, { json: ctx.json });
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+    { includeCompany: false },
   );
 
   addCommonClientOptions(
@@ -2350,6 +2378,66 @@ function buildApiUrl(apiBase: string, path: string): string {
   const url = new URL(apiBase);
   url.pathname = `${url.pathname.replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
   return url.toString();
+}
+
+/** document:image 收的图片扩展名；服务端的类型白名单仍是最终裁判。 */
+const IMAGE_FILE_EXTENSION_RE = /\.(png|jpe?g|webp|gif)$/i;
+
+/**
+ * `document:put` 与 `document:image` 共用的写入路径：模板校验 → 认领 → 带
+ * base-revision 缺失自修的 PUT。抽成一个函数，让追加图片和手写正文过
+ * 完全相同的门禁，两条命令不会漂移。
+ */
+async function upsertIssueDocument(
+  ctx: ResolvedClientContext,
+  issueId: string,
+  key: string,
+  input: {
+    title?: string;
+    format?: string;
+    body?: string;
+    changeSummary?: string;
+    baseRevisionId?: string;
+  },
+): Promise<unknown> {
+  // 读卡提前到这里只为拿 identifier 补默认标题。它是 GET 不是认领，认领仍在
+  // 模板校验之后，顺序没变。
+  const existing = await ctx.api.get<Issue>(apiPath`/api/issues/${issueId}`).catch(() => null);
+  const payload = upsertIssueDocumentSchema.parse({
+    title: input.title?.trim() || defaultDocumentTitle(key, existing?.identifier) || undefined,
+    format: input.format ?? "markdown",
+    body: input.body,
+    changeSummary: input.changeSummary,
+    baseRevisionId: input.baseRevisionId,
+  });
+  const path = apiPath`/api/issues/${issueId}/documents/${key}`;
+  // 模板校验排在认领之前：被拒的写入不该留下一次认领。
+  if (key.trim().toLowerCase() === "decision-log") {
+    // 上一版正文只为「只查这次动过的条目」而读：继承来的不合规条目不该
+    // 挡住后来人。第一次建文档撞 404，当空串走全查。
+    const prev = await ctx.api.get<{ body?: string }>(path).catch(() => null);
+    const templateError = decisionLogTemplateError(prev?.body ?? "", payload.body ?? "");
+    if (templateError) throw new Error(templateError);
+  }
+  // 认领门禁扩面 (MUL-443): writing a document is taking the card, so
+  // the CLI takes it rather than making the caller discover the 409.
+  if (existing) await autoClaimIfUnclaimed(ctx, existing);
+  try {
+    return await ctx.api.put(path, payload);
+  } catch (err) {
+    // 机械门禁自修 (MUL-453): "this document already exists, name the
+    // revision you are editing" is a fact the CLI can look up, not a
+    // decision the caller has to make, so it looks it up. The server
+    // hands the current revision back in the rejection precisely so
+    // this is possible.
+    //
+    // Only the missing-id case retries. A STALE id means somebody
+    // else's revision landed in between, and blindly re-basing would
+    // erase their edit — that one stays the caller's call.
+    const revisionId = missingBaseRevisionId(err);
+    if (!revisionId) throw err;
+    return ctx.api.put(path, { ...payload, baseRevisionId: revisionId });
+  }
 }
 
 async function uploadAttachment(

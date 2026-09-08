@@ -375,6 +375,7 @@ npx paperclipai issue recovery:resolve <issue-id> --outcome restored --source-is
 npx paperclipai issue documents <issue-id> [--include-system]
 npx paperclipai issue document:get <issue-id> <key>
 npx paperclipai issue document:put <issue-id> <key> --body-file ./plan.md [--title Plan]
+npx paperclipai issue document:image <issue-id> <key> --file ./shot.png [--caption "说明"]
 npx paperclipai issue document:lock <issue-id> <key>
 npx paperclipai issue document:unlock <issue-id> <key>
 npx paperclipai issue document:revisions <issue-id> <key>
