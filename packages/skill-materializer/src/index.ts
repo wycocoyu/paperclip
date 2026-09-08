@@ -35,3 +35,34 @@ export {
   type SkillSidecarBookkeeping,
   type SkillSnapshotFile,
 } from "./materialize.js";
+export {
+  TEAM_SKILLS_DIRNAME,
+  claudeSkillsHome,
+  codexSkillsHome,
+  cursorSkillsHome,
+  inspectSkillLink,
+  kimiSkillsHome,
+  resolvePaperclipRepoRoot,
+  terminalSkillTargets,
+  zcodeSkillsHome,
+  type SkillLinkInspection,
+  type TerminalSkillTool,
+} from "./terminals.js";
+export {
+  collectSkillsStatus,
+  foreignLinkRoots,
+  type FanoutFailureLookup,
+  type SkillFanoutFailure,
+  type SkillStatusRow,
+  type SkillsStatusResult,
+} from "./status.js";
+export {
+  collectSkillsUsage,
+  extractSkillCalls,
+  harnessSources,
+  usageCachePath,
+  type SkillUsageRow,
+  type SkillsUsageOptions,
+  type SkillsUsageResult,
+  type UsageHarness,
+} from "./usage.js";

@@ -36,6 +36,7 @@ import {
   skillFanoutFailures,
 } from "../services/index.js";
 import { isGitRepoSkillImportSource, parseSkillImportSourceInput } from "../services/company-skills.js";
+import { skillsLocalStatus, skillsUsage } from "../services/skills-telemetry.js";
 import {
   getCatalogSkillOrThrow,
   listCatalogSkillsOrEmpty,
@@ -345,6 +346,32 @@ export function companySkillRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     res.json({ failures: skillFanoutFailures(companyId) });
+  });
+
+  // This machine's skill telemetry, read-only, for the Team Skills page. Both
+  // answers come from the collectors `paperclipai skills usage` / `skills
+  // status` run, so the page and the commands can never disagree. Registered
+  // before the :skillId routes so the literal segments are not read as ids.
+  router.get("/companies/:companyId/skills/usage", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const raw = typeof req.query.days === "string" ? req.query.days : "30";
+    const days = Number.parseInt(raw, 10);
+    if (!Number.isFinite(days) || days <= 0 || days > 3650) {
+      throw badRequest(`days must be a positive integer up to 3650, got "${raw}"`);
+    }
+    res.json(await skillsUsage(days));
+  });
+
+  router.get("/companies/:companyId/skills/local-status", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const result = await skillsLocalStatus(companyId);
+    if (!result) {
+      res.status(404).json({ error: "No Paperclip repo checkout on this host; skill projection is unknown." });
+      return;
+    }
+    res.json(result);
   });
 
   router.get("/companies/:companyId/skills/:skillId", async (req, res) => {
