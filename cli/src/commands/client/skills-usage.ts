@@ -5,6 +5,7 @@ import type { SkillsUsageResult } from "@paperclipai/skill-materializer";
 // be two answers to "how often was this skill called".
 export {
   collectSkillsUsage,
+  extractCodexSkillReads,
   extractSkillCalls,
   harnessSources,
   usageCachePath,
@@ -15,12 +16,11 @@ export {
 } from "@paperclipai/skill-materializer";
 
 /**
- * Codex consumes skills by reading SKILL.md with `sed`, so it emits no Skill
- * tool call and the frozen counting rule scores it zero for every skill. Say so
- * next to the column: a structural zero and an unused skill look identical.
+ * The two columns are not the same measurement, and a reader who assumes they
+ * are will draw the wrong conclusion from the sum. Say it under the table.
  */
-export const CODEX_ZERO_NOTE =
-  "codex is structurally 0: it has no Skill tool and reads SKILL.md directly, so the frozen rule (explicit Skill calls only) cannot see its usage — not evidence nobody uses skills there.";
+export const CODEX_CALIBER_NOTE =
+  "the two columns count different things: claude/zcode count explicit Skill tool calls (N per session), codex has no Skill tool and counts sessions that read the skill's SKILL.md (once per session, however many reads). Magnitudes are comparable; the units are not.";
 
 export function printSkillsUsage(result: SkillsUsageResult): void {
   const nameWidth = Math.max(6, ...result.skills.map((row) => row.skill.length));
@@ -47,5 +47,5 @@ export function printSkillsUsage(result: SkillsUsageResult): void {
     console.log(`${result.unreadable.length} session file(s) unreadable; counts below the truth:`);
     for (const entry of result.unreadable) console.log(`  ${entry.file}: ${entry.error}`);
   }
-  console.log(`note: ${CODEX_ZERO_NOTE}`);
+  console.log(`note: ${CODEX_CALIBER_NOTE}`);
 }

@@ -58,6 +58,7 @@ export {
 } from "./status.js";
 export {
   collectSkillsUsage,
+  extractCodexSkillReads,
   extractSkillCalls,
   harnessSources,
   usageCachePath,

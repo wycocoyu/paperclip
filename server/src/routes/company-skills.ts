@@ -360,7 +360,10 @@ export function companySkillRoutes(db: Db) {
     if (!Number.isFinite(days) || days <= 0 || days > 3650) {
       throw badRequest(`days must be a positive integer up to 3650, got "${raw}"`);
     }
-    res.json(await skillsUsage(days));
+    // The page's Refresh button. Opt-in only: a full rescan is ~22s here, so it
+    // must never be what an ordinary page open pays.
+    const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+    res.json(await skillsUsage(days, Date.now(), { refresh }));
   });
 
   router.get("/companies/:companyId/skills/local-status", async (req, res) => {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectSkillsUsage,
+  extractCodexSkillReads,
   extractSkillCalls,
   harnessSources,
 } from "../commands/client/skills-usage.js";
@@ -16,6 +17,19 @@ async function writeJsonl(file: string, records: unknown[], mtimeMs: number): Pr
   await fs.writeFile(file, records.map((record) => JSON.stringify(record)).join("\n"), "utf8");
   const when = new Date(mtimeMs);
   await fs.utimes(file, when, when);
+}
+
+/** One Codex exec record, shaped like the `parsed_cmd` its rollout log writes. */
+function codexRead(skillPath: string): unknown {
+  return {
+    type: "event_msg",
+    payload: {
+      command: ["/bin/zsh", "-lc", `sed -n '1,240p' ${skillPath}`],
+      parsed_cmd: [
+        { type: "read", cmd: `sed -n '1,240p' ${skillPath}`, name: "SKILL.md", path: skillPath },
+      ],
+    },
+  };
 }
 
 function claudeCall(id: string, skill: string, extra: Record<string, unknown> = {}): unknown {
@@ -84,6 +98,57 @@ describe("skills usage", () => {
     expect(result.skills).toEqual([
       { skill: "paperclip", total: 2, byHarness: { claude: 0, codex: 0, zcode: 2 } },
     ]);
+  });
+
+  it("takes a Codex skill name from the directory holding SKILL.md, whatever the root", () => {
+    expect(
+      extractCodexSkillReads(codexRead("/Users/x/.codex/skills/.system/imagegen/SKILL.md")),
+    ).toEqual(["imagegen"]);
+    expect(extractCodexSkillReads(codexRead("skills/handle/SKILL.md"))).toEqual(["handle"]);
+    // A SKILL.md path echoed by some other tool's output is not a read of it.
+    expect(
+      extractCodexSkillReads({ enrichedPaths: [{ path: "coco-knowledge/SKILL.md" }] }),
+    ).toEqual([]);
+    // Nor is writing one.
+    expect(
+      extractCodexSkillReads({ parsed_cmd: [{ type: "write", name: "SKILL.md", path: "a/b/SKILL.md" }] }),
+    ).toEqual([]);
+  });
+
+  it("scores a Codex skill once per session however many times the session re-reads it", async () => {
+    const skill = "/Users/x/.codex/skills/team-grilling/SKILL.md";
+    await writeJsonl(
+      path.join(home, ".codex", "sessions", "2026", "09", "sess-a.jsonl"),
+      [codexRead(skill), codexRead(skill), codexRead(skill)],
+      NOW - DAY,
+    );
+    await writeJsonl(
+      path.join(home, ".codex", "sessions", "2026", "09", "sess-b.jsonl"),
+      [codexRead(skill)],
+      NOW - DAY,
+    );
+
+    const result = await collectSkillsUsage({ days: 30, cache: false, now: () => NOW });
+    expect(result.skills).toEqual([
+      { skill: "team-grilling", total: 2, byHarness: { claude: 0, codex: 2, zcode: 0 } },
+    ]);
+  });
+
+  it("leaves the Claude and ZCode columns on explicit Skill calls only", async () => {
+    // The same read that counts for Codex must stay invisible in the other two.
+    await writeJsonl(
+      path.join(home, ".claude", "projects", "-repo", "sess.jsonl"),
+      [codexRead("/Users/x/.codex/skills/team-grilling/SKILL.md")],
+      NOW - DAY,
+    );
+    await writeJsonl(
+      path.join(home, ".zcode", "cli", "rollout", "model-io-sess.jsonl"),
+      [codexRead("/Users/x/.codex/skills/team-grilling/SKILL.md")],
+      NOW - DAY,
+    );
+
+    const result = await collectSkillsUsage({ days: 30, cache: false, now: () => NOW });
+    expect(result.totalCalls).toBe(0);
   });
 
   it("counts sub-agent transcripts and groups totals by harness", async () => {

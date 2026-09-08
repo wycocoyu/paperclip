@@ -18,6 +18,15 @@ import readline from "node:readline";
  * survive a transcript format that replays history: ZCode's `model-io-*.jsonl`
  * records the full conversation on every request, so one call appears in every
  * later record. Counting lines instead of ids inflated a 7-call sample to 824.
+ *
+ * MUL-581 carves out Codex, which has no Skill tool at all: it consumes a skill
+ * by reading `<dir>/SKILL.md`, so the rule above scored it a flat zero for every
+ * skill and that zero was read as "nobody uses skills there". Codex therefore
+ * counts reads instead — but *de-duplicated per session*, one read or twenty of
+ * the same SKILL.md scoring 1. Raw reads run one to two orders of magnitude
+ * above Claude's call counts (`ark-work-report` alone: 1394 across 12 files),
+ * which would make the two columns and their sum meaningless side by side. The
+ * two calibres differ and the UI says so; only the magnitudes are comparable.
  */
 export type UsageHarness = "claude" | "codex" | "zcode";
 
@@ -53,7 +62,10 @@ interface UsageCache {
   files: Record<string, CacheEntry>;
 }
 
-const CACHE_VERSION = 2;
+// 3: Codex entries gained SKILL.md reads (MUL-581); a v2 entry for a Codex
+// transcript holds an empty call list that is now wrong, and mtime+size cannot
+// tell the two apart.
+const CACHE_VERSION = 3;
 
 export function usageCachePath(): string {
   return path.join(os.homedir(), ".paperclip", "skills-usage-cache.json");
@@ -113,21 +125,54 @@ export function extractSkillCalls(record: unknown): SkillCall[] {
 }
 
 /**
+ * Codex's exec records carry its own parse of the command it ran; a `sed`/`cat`
+ * of a skill body shows up as `{type: "read", name: "SKILL.md", path}`. That
+ * parsed form is the whole signal — grepping the raw path would also count the
+ * SKILL.md mentions in Codex's own system prompt and in unrelated tool output.
+ *
+ * The slug is the directory holding the file, which covers every root in play
+ * (`~/.codex/skills/x`, `~/.agents/skills/x`, `.system/x`, a plugin cache, a
+ * relative `skills/x`) without a list of roots to keep current.
+ */
+export function extractCodexSkillReads(record: unknown): string[] {
+  const skills: string[] = [];
+  const stack: unknown[] = [record];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (Array.isArray(node)) {
+      stack.push(...node);
+      continue;
+    }
+    if (!node || typeof node !== "object") continue;
+    const obj = node as Record<string, unknown>;
+    if (obj.name === "SKILL.md" && obj.type === "read" && typeof obj.path === "string") {
+      const slug = /(?:^|[/\\])([^/\\]+)[/\\]SKILL\.md$/.exec(obj.path)?.[1];
+      if (slug) skills.push(slug);
+    }
+    stack.push(...Object.values(obj));
+  }
+  return skills;
+}
+
+/**
  * Streamed rather than slurped: ZCode replays the whole conversation into every
  * `model-io-*.jsonl` record, so one live session's rollout is 1.4 GB here.
  * `readFile` throws above the string cap, and a caught throw would report that
  * session as "no calls" — a silent undercount is worse than a slow read.
  */
-async function parseFile(file: string): Promise<SkillCall[]> {
+async function parseFile(file: string, harness: UsageHarness): Promise<SkillCall[]> {
   const seen = new Set<string>();
   const calls: SkillCall[] = [];
   const stream = createReadStream(file, { encoding: "utf8" });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const codex = harness === "codex";
   try {
     for await (const line of lines) {
       // Cheap prefilter: the vast majority of transcript lines never mention
       // the tool, and JSON.parse is the whole cost of this command.
-      if (!line.includes('"Skill"')) continue;
+      const skillCall = line.includes('"Skill"');
+      const skillRead = codex && line.includes('"SKILL.md"');
+      if (!skillCall && !skillRead) continue;
       let record: unknown;
       try {
         record = JSON.parse(line);
@@ -138,6 +183,15 @@ async function parseFile(file: string): Promise<SkillCall[]> {
         if (seen.has(call.id)) continue;
         seen.add(call.id);
         calls.push(call);
+      }
+      if (!skillRead) continue;
+      for (const skill of extractCodexSkillReads(record)) {
+        // The id *is* the skill name, so the de-dup above collapses every
+        // re-read inside this session to one — the whole session-scoped rule.
+        const id = `read:${skill}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        calls.push({ id, skill });
       }
     }
   } finally {
@@ -220,7 +274,7 @@ export async function collectSkillsUsage(opts: SkillsUsageOptions): Promise<Skil
         calls = fresh.calls;
       } else {
         try {
-          calls = await parseFile(file);
+          calls = await parseFile(file, harness);
         } catch (err) {
           // Counted, not swallowed: an unread file is an unknown, and the
           // summary says how many so a wrong total is never silent.
