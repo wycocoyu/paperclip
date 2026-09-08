@@ -73,9 +73,9 @@ export function teamRulesRoutes(db: Db) {
 
   // Read-only view of Rules *and* Wiki fan-out deliveries that exhausted their
   // retries. One endpoint because they share one queue; it lives here rather
-  // than in a file of its own. In-memory only: the list resets on restart, and
-  // nothing rebuilds it — OpenViking has no local marker to reconcile against,
-  // so a parked delivery is recovered by the next save or by ov-sync.
+  // than in a file of its own. In-memory only: the list resets on restart —
+  // what recovers a parked delivery after that is the startup sweep, which
+  // re-queues anything whose delivery watermark disagrees with the row.
   router.get("/companies/:companyId/team-docs/fanout-failures", (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);

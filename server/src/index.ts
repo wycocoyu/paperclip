@@ -63,6 +63,7 @@ import {
   reconcileCodexLocalManagedHomesOnStartup,
   reconcilePersistedRuntimeServicesOnStartup,
   reconcileSkillFanoutOnStartup,
+  reconcileTeamDocFanoutOnStartup,
   routineService,
   statusCardService,
   toolAccessService,
@@ -977,14 +978,10 @@ export async function startServer(): Promise<StartedServer> {
       logger.error({ err }, "startup reconciliation of codex_local managed homes failed");
     });
 
-  // Skill fan-out is armed before the sweep so a publish racing startup queues
-  // rather than vanishing, and the sweep itself covers the window between a
-  // commit and a fan-out the previous process never got to run.
+  // Both fan-outs are armed before their sweeps so a publish racing startup
+  // queues rather than vanishing, and the sweeps themselves cover the window
+  // between a commit and a fan-out the previous process never got to run.
   configureSkillFanout(config.skillsTeamProjection);
-  // No startup reconciliation for Team Rules/Wiki: OpenViking is a remote store
-  // with no local marker to compare against, so a sweep would have to re-push
-  // every note and page on every boot. The ov-sync hook remains the catch-up
-  // path until MUL-559 step 6 retires it.
   configureTeamDocFanout(config.teamDocProjection);
   void reconcileSkillFanoutOnStartup(db)
     .then((result) => {
@@ -994,6 +991,15 @@ export async function startServer(): Promise<StartedServer> {
     })
     .catch((err) => {
       logger.error({ err }, "startup reconciliation of skill fan-out failed");
+    });
+  void reconcileTeamDocFanoutOnStartup(db)
+    .then((result) => {
+      if (result.queued > 0) {
+        logger.warn(result, "startup reconciliation queued team doc fan-out for drifted notes or pages");
+      }
+    })
+    .catch((err) => {
+      logger.error({ err }, "startup reconciliation of team doc fan-out failed");
     });
 
   void reconcileBuiltInAgentsOnStartup(db as any)

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-export type TerminalSkillTool = "codex" | "claude" | "kimi" | "zcode" | "custom";
+export type TerminalSkillTool = "codex" | "claude" | "kimi" | "zcode" | "cursor" | "custom";
 
 // Team skills materialize into the repo checkout beside the upstream `skills/`
 // tree so both link sources live under one root and stay out of the worktree.
@@ -83,12 +83,27 @@ export function zcodeSkillsHome(): string {
   return path.join(base, "skills");
 }
 
+// `CURSOR_HOME` names the `.cursor` directory itself, the same way the repo's
+// cursor-local adapter reads it, so the skills home hangs off it unchanged.
+//
+// Cursor also carries a second, server-driven set of links here, named
+// `<slug>--<hash>` and pointing at the agent's managed source
+// (`server/src/services/company-skills.ts` buildSkillRuntimeName). Those are
+// not this function's business: `skills pull` only ever touches slugs its own
+// sources claim, so the two sets coexist in one directory.
+export function cursorSkillsHome(): string {
+  const fromEnv = process.env.CURSOR_HOME?.trim();
+  const base = fromEnv && fromEnv.length > 0 ? fromEnv : path.join(os.homedir(), ".cursor");
+  return path.join(base, "skills");
+}
+
 export function terminalSkillTargets(): Array<{ tool: TerminalSkillTool; dir: string }> {
   return [
     { tool: "codex", dir: codexSkillsHome() },
     { tool: "claude", dir: claudeSkillsHome() },
     { tool: "kimi", dir: kimiSkillsHome() },
     { tool: "zcode", dir: zcodeSkillsHome() },
+    { tool: "cursor", dir: cursorSkillsHome() },
   ];
 }
 

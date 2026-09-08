@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { teamRuleNotes, teamWikiPages } from "@paperclipai/db";
+import { teamDocFanoutWatermarks, teamRuleNotes, teamWikiPages } from "@paperclipai/db";
 import type { TeamDocProjection } from "../config.js";
 import { logger } from "../middleware/logger.js";
 import { createFanoutQueue } from "./fanout-queue.js";
@@ -17,14 +18,19 @@ import { openVikingSink } from "./team-doc-ov-sink.js";
  */
 export interface TeamRuleVersionPublishedEvent {
   companyId: string;
-  noteId: string;
-  versionId: string;
+  /**
+   * Which save triggered this, for the log only. Both are absent on the startup
+   * sweep, which knows the company is behind but not which save the previous
+   * process died holding.
+   */
+  noteId?: string;
+  versionId?: string;
 }
 
 export interface TeamWikiVersionPublishedEvent {
   companyId: string;
   pageId: string;
-  versionId: string;
+  versionId?: string;
 }
 
 type TeamDocEvent =
@@ -59,10 +65,7 @@ const sinks: TeamDocFanoutSink[] = [openVikingSink];
 let projection: TeamDocProjection | null = null;
 
 const queue = createFanoutQueue<Db, TeamDocEvent>({
-  // Rules render as one company-wide pair of documents, so every note edit
-  // coalesces onto a single task; wiki pages are independent files.
-  keyOf: (event) =>
-    event.kind === "rules" ? `${event.companyId}/rules` : `${event.companyId}/wiki/${event.pageId}`,
+  keyOf: (event) => `${event.companyId}/${scopeOf(event)}`,
   deliver,
   onRetry: (event, key, err, attempt) => {
     logger.warn({ err, key, attempt, ...event }, "team doc fan-out failed; retrying");
@@ -86,11 +89,21 @@ export function setTeamDocFanoutSinksForTests(next: TeamDocFanoutSink[]): void {
   sinks.splice(0, sinks.length, ...next);
 }
 
+/**
+ * The delivery unit, and the watermark key that records it. Rules render as one
+ * company-wide pair of documents, so every note edit coalesces onto a single
+ * task; wiki pages are independent files.
+ */
+function scopeOf(event: TeamDocEvent): string {
+  return event.kind === "rules" ? "rules" : `wiki/${event.pageId}`;
+}
+
 /** One terminal fan-out failure, as the read-only failures route reports it. */
 export interface TeamDocFanoutFailure {
   companyId: string;
   kind: "rules" | "wiki";
-  entityId: string;
+  /** Null on the startup sweep's rules task, which has no triggering note. */
+  entityId: string | null;
   lastError: string;
   attempts: number;
   lastAttemptAt: string;
@@ -103,7 +116,7 @@ export function teamDocFanoutFailures(companyId?: string): TeamDocFanoutFailure[
     .map((entry) => ({
       companyId: entry.event.companyId,
       kind: entry.event.kind,
-      entityId: entry.event.kind === "rules" ? entry.event.noteId : entry.event.pageId,
+      entityId: entry.event.kind === "rules" ? entry.event.noteId ?? null : entry.event.pageId,
       lastError: entry.error,
       attempts: entry.attempts,
       lastAttemptAt: entry.at,
@@ -134,16 +147,68 @@ async function deliver(db: Db, event: TeamDocEvent): Promise<void> {
       const status = await sink.deliverRules(snapshot, active);
       logger.debug({ sink: sink.name, status, ...event }, "team doc fan-out delivered");
     }
+    await recordDelivered(db, event.companyId, scopeOf(event), fingerprintRules(snapshot));
     return;
   }
   const snapshot = await loadWikiSnapshot(db, event);
   // A page deleted or archived between commit and delivery has nothing left to
-  // project; retiring its OpenViking file is not this path's job.
-  if (!snapshot) return;
+  // project; retiring its OpenViking file is not this path's job. Its watermark
+  // goes, so an unarchive with unchanged bytes still re-delivers.
+  if (!snapshot) {
+    await clearDelivered(db, event.companyId, scopeOf(event));
+    return;
+  }
   for (const sink of sinks) {
     const status = await sink.deliverWikiPage(snapshot, active);
     logger.debug({ sink: sink.name, status, ...event }, "team doc fan-out delivered");
   }
+  await recordDelivered(db, event.companyId, scopeOf(event), fingerprintWikiPage(snapshot));
+}
+
+/**
+ * Only reached once every sink returned, so a watermark can never claim a
+ * delivery that did not happen — a sink that throws sends the whole task back
+ * through the queue's retry with the watermark still on the previous value.
+ */
+async function recordDelivered(db: Db, companyId: string, scope: string, contentHash: string): Promise<void> {
+  const deliveredAt = new Date();
+  await db
+    .insert(teamDocFanoutWatermarks)
+    .values({ companyId, scope, contentHash, deliveredAt })
+    .onConflictDoUpdate({
+      target: [teamDocFanoutWatermarks.companyId, teamDocFanoutWatermarks.scope],
+      set: { contentHash, deliveredAt },
+    });
+}
+
+async function clearDelivered(db: Db, companyId: string, scope: string): Promise<void> {
+  await db
+    .delete(teamDocFanoutWatermarks)
+    .where(and(
+      eq(teamDocFanoutWatermarks.companyId, companyId),
+      eq(teamDocFanoutWatermarks.scope, scope),
+    ));
+}
+
+/**
+ * Length-prefixed so a title that ends where the next field begins cannot
+ * produce the digest of a genuinely different snapshot.
+ */
+function fingerprint(parts: readonly string[]): string {
+  const hash = createHash("sha256");
+  for (const part of parts) hash.update(`${Buffer.byteLength(part, "utf8")}\n${part}`);
+  return hash.digest("hex");
+}
+
+// Fingerprints cover the snapshot, not the rendered bytes: the snapshot is what
+// a restart can re-read, and it is shared by every sink. A renderer change is a
+// deploy, not drift, and does not have to be caught here.
+function fingerprintRules(snapshot: TeamRulesSnapshot): string {
+  return fingerprint(snapshot.notes.flatMap((note) => [note.title, note.body ?? ""]));
+}
+
+function fingerprintWikiPage(snapshot: TeamWikiPageSnapshot): string {
+  return fingerprint([snapshot.space, snapshot.path, snapshot.title, snapshot.body ?? ""]);
 }
 
 async function loadRulesSnapshot(db: Db, companyId: string): Promise<TeamRulesSnapshot> {
@@ -186,4 +251,82 @@ async function loadWikiSnapshot(
     title: page.title,
     body: page.body,
   };
+}
+
+/**
+ * Covers the process that died between commit and fan-out — acceptance
+ * criterion 7 of the MUL-559 proposal, and the hard prerequisite for retiring
+ * the ov-sync hook.
+ *
+ * Compares each delivery unit's current snapshot against the watermark the last
+ * successful push left behind and queues only the ones that disagree, so a
+ * steady state costs two queries and no OpenViking traffic. The first boot after
+ * this ships has no watermarks yet and therefore pushes everything once.
+ *
+ * What it cannot see is drift on OpenViking's own side: the watermark records
+ * what we sent, not what the store still holds. Reading every URI back would
+ * cost one `ov read` per file on every boot, and a file edited inside
+ * OpenViking is MUL-566's territory, not a lost delivery.
+ */
+export async function reconcileTeamDocFanoutOnStartup(
+  db: Db,
+): Promise<{ scanned: number; queued: number; upToDate: number }> {
+  const active = projection;
+  if (!active) return { scanned: 0, queued: 0, upToDate: 0 };
+
+  const marks = new Map(
+    (await db
+      .select({ scope: teamDocFanoutWatermarks.scope, contentHash: teamDocFanoutWatermarks.contentHash })
+      .from(teamDocFanoutWatermarks)
+      .where(eq(teamDocFanoutWatermarks.companyId, active.companyId)))
+      .map((row) => [row.scope, row.contentHash] as const),
+  );
+
+  let scanned = 0;
+  let queued = 0;
+  let upToDate = 0;
+
+  // A company with no notes renders no rules document, so there is nothing to
+  // be behind on and nothing to queue.
+  const rules = await loadRulesSnapshot(db, active.companyId);
+  if (rules.notes.length > 0) {
+    scanned += 1;
+    if (marks.get("rules") === fingerprintRules(rules)) upToDate += 1;
+    else {
+      queue.publish(db, { kind: "rules", companyId: active.companyId });
+      queued += 1;
+    }
+  }
+
+  const pages = await db
+    .select({
+      id: teamWikiPages.id,
+      companyId: teamWikiPages.companyId,
+      space: teamWikiPages.space,
+      path: teamWikiPages.path,
+      title: teamWikiPages.title,
+      body: teamWikiPages.body,
+    })
+    .from(teamWikiPages)
+    .where(and(eq(teamWikiPages.companyId, active.companyId), isNull(teamWikiPages.archivedAt)));
+
+  for (const page of pages) {
+    scanned += 1;
+    const snapshot: TeamWikiPageSnapshot = {
+      companyId: page.companyId,
+      pageId: page.id,
+      space: page.space,
+      path: page.path,
+      title: page.title,
+      body: page.body,
+    };
+    if (marks.get(`wiki/${page.id}`) === fingerprintWikiPage(snapshot)) {
+      upToDate += 1;
+      continue;
+    }
+    queue.publish(db, { kind: "wiki", companyId: active.companyId, pageId: page.id });
+    queued += 1;
+  }
+
+  return { scanned, queued, upToDate };
 }

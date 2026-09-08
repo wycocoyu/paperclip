@@ -201,6 +201,7 @@ export {
   configureTeamDocFanout,
   publishTeamRuleVersionPublished,
   publishTeamWikiVersionPublished,
+  reconcileTeamDocFanoutOnStartup,
   teamDocFanoutFailures,
 } from "./team-doc-fanout.js";
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";
