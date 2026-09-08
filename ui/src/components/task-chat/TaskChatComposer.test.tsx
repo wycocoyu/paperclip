@@ -124,6 +124,10 @@ vi.mock("../../lib/mention-deletion", () => ({
   mentionDeletionPlugin: () => ({}),
 }));
 
+vi.mock("../../lib/image-paste", () => ({
+  imagePastePlugin: () => ({}),
+}));
+
 vi.mock("../../lib/paste-normalization", () => ({
   pasteNormalizationPlugin: () => ({}),
 }));
