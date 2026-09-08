@@ -1,7 +1,7 @@
 import { readConfigFile } from "./config-file.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import path, { resolve } from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { resolvePaperclipEnvPath } from "./paths.js";
 import { maybeRepairLegacyWorktreeConfigAndEnvFiles } from "./worktree-config.js";
@@ -88,6 +88,24 @@ export interface Config {
   heartbeatSchedulerIntervalMs: number;
   companyDeletionEnabled: boolean;
   telemetryEnabled: boolean;
+  skillsTeamProjection: SkillsTeamProjection | null;
+  teamDocProjection: TeamDocProjection | null;
+}
+
+/** Where post-commit skill fan-out projects one company's skills on disk. */
+export interface SkillsTeamProjection {
+  dir: string;
+  companyId: string;
+}
+
+/**
+ * Where post-commit Team Rules / Team Wiki fan-out pushes. The OpenViking
+ * rules and wiki URIs carry no company segment, so a second company would
+ * overwrite the first — hence one company, named outright.
+ */
+export interface TeamDocProjection {
+  ovBin: string;
+  companyId: string;
 }
 
 function detectTailnetBindHost(): string | undefined {
@@ -107,6 +125,42 @@ function detectTailnetBindHost(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+// The CLI derives skills-team/ from the repo checkout it is run inside. A server
+// has no such checkout, so the projection target is configured outright — and
+// half a configuration is a silent no-op, which is the exact failure MUL-559 is
+// about, so it throws instead.
+function resolveSkillsTeamProjection(): SkillsTeamProjection | null {
+  const dirRaw = process.env.PAPERCLIP_SKILLS_TEAM_DIR?.trim();
+  const companyId = process.env.PAPERCLIP_SKILLS_TEAM_COMPANY_ID?.trim();
+  if (!dirRaw && !companyId) return null;
+  if (!dirRaw || !companyId) {
+    throw new Error(
+      "PAPERCLIP_SKILLS_TEAM_DIR and PAPERCLIP_SKILLS_TEAM_COMPANY_ID must be set together; set both to enable skill fan-out, or neither to disable it.",
+    );
+  }
+  if (!dirRaw.startsWith("~") && !path.isAbsolute(dirRaw)) {
+    throw new Error(`PAPERCLIP_SKILLS_TEAM_DIR must be an absolute path (or ~-prefixed), got "${dirRaw}".`);
+  }
+  return { dir: resolveHomeAwarePath(dirRaw), companyId };
+}
+
+// Same shape as resolveSkillsTeamProjection: half a configuration is a silent
+// no-op, which is the exact failure MUL-559 is about, so it throws instead.
+function resolveTeamDocProjection(): TeamDocProjection | null {
+  const binRaw = process.env.PAPERCLIP_OV_SYNC_BIN?.trim();
+  const companyId = process.env.PAPERCLIP_OV_SYNC_COMPANY_ID?.trim();
+  if (!binRaw && !companyId) return null;
+  if (!binRaw || !companyId) {
+    throw new Error(
+      "PAPERCLIP_OV_SYNC_BIN and PAPERCLIP_OV_SYNC_COMPANY_ID must be set together; set both to enable Team Rules/Wiki fan-out to OpenViking, or neither to disable it.",
+    );
+  }
+  if (!binRaw.startsWith("~") && !path.isAbsolute(binRaw)) {
+    throw new Error(`PAPERCLIP_OV_SYNC_BIN must be an absolute path (or ~-prefixed), got "${binRaw}".`);
+  }
+  return { ovBin: resolveHomeAwarePath(binRaw), companyId };
 }
 
 export function loadConfig(): Config {
@@ -350,5 +404,7 @@ export function loadConfig(): Config {
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     companyDeletionEnabled,
     telemetryEnabled: fileConfig?.telemetry?.enabled ?? true,
+    skillsTeamProjection: resolveSkillsTeamProjection(),
+    teamDocProjection: resolveTeamDocProjection(),
   };
 }

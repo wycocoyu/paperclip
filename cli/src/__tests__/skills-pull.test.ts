@@ -1,11 +1,11 @@
 import { Command } from "commander";
+import { hashFileMap } from "@paperclipai/skill-materializer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSkillsCommands } from "../commands/client/skills.js";
 import type { ResolvedClientContext } from "../commands/client/common.js";
-import { hashFileMap } from "../commands/client/skill-files.js";
 import {
   materializeCompanySkills,
   readSidecar,
@@ -217,6 +217,87 @@ describe("sidecar lastChangedAt", () => {
     expect(sidecar?.lastChangedAt).toBe("2026-01-01T00:00:00.000Z");
     expect(sidecar?.files).toEqual(["SKILL.md"]);
     expect(sidecar?.currentVersionId).toBe("v1");
+  });
+});
+
+describe("sidecar in the remote snapshot", () => {
+  // Snapshots taken before the server skipped the sidecar carry it as a file.
+  // The client never reads it back, so trusting the recorded hash flagged every
+  // such skill as locally modified and pull silently skipped it forever.
+  const withSidecar: LibrarySkill = {
+    id: "skill-1",
+    slug: "review-prs",
+    currentVersionId: "v1",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    files: { "SKILL.md": "# v1", ".paperclip-skill.json": "{\"stale\":true}" },
+  };
+
+  it("never materializes the sidecar as skill content", async () => {
+    await pull(library(withSidecar));
+
+    const sidecar = await readSidecar(path.join(teamDir, "review-prs"));
+    expect(sidecar?.files).toEqual(["SKILL.md"]);
+    expect(sidecar?.skillId).toBe("skill-1");
+  });
+
+  it("pulls an untouched directory whose sidecar hash was taken over the sidecar itself", async () => {
+    const skillDir = path.join(teamDir, "review-prs");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# v1", "utf8");
+    // Exactly what the old client wrote: a hash over the remote inventory with
+    // the sidecar entry in it, against a file list that names the sidecar. The
+    // sidecar is never read back, so that hash can never be reproduced.
+    const poisonedHash = hashFileMap(new Map([
+      ["SKILL.md", "# v1"],
+      [".paperclip-skill.json", "{\"stale\":true}"],
+    ]));
+    await fs.writeFile(
+      path.join(skillDir, ".paperclip-skill.json"),
+      JSON.stringify({
+        skillId: "skill-1",
+        key: "paperclip/review-prs",
+        remoteHash: poisonedHash,
+        localHash: poisonedHash,
+        syncedAt: "2026-08-01T00:00:00.000Z",
+        currentVersionId: "v1",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+        files: [".paperclip-skill.json", "SKILL.md"],
+        lastChangedAt: "2026-08-01T00:00:00.000Z",
+      }),
+      "utf8",
+    );
+
+    // The server dropped the sidecar from its scan, so the snapshot no longer
+    // carries it and the recorded hash stops matching anything.
+    const rows = await pull(
+      library({
+        id: "skill-1",
+        slug: "review-prs",
+        currentVersionId: "v2",
+        updatedAt: "2026-08-02T00:00:00.000Z",
+        files: { "SKILL.md": "# v1" },
+      }),
+    );
+
+    expect(statusOf(rows, "review-prs")).toBe("updated");
+    expect((await readSidecar(skillDir))?.files).toEqual(["SKILL.md"]);
+    expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe("# v1");
+  });
+
+  it("still refuses to overwrite a genuinely edited file", async () => {
+    await pull(library(withSidecar));
+    await fs.writeFile(path.join(teamDir, "review-prs", "SKILL.md"), "# hand edited", "utf8");
+
+    const rows = await pull(
+      library({
+        ...withSidecar,
+        currentVersionId: "v2",
+        updatedAt: "2026-08-02T00:00:00.000Z",
+        files: { "SKILL.md": "# v2" },
+      }),
+    );
+
+    expect(statusOf(rows, "review-prs")).toBe("skipped-local-modified");
   });
 });
 

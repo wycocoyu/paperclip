@@ -1,5 +1,6 @@
 export { teamRuleNotes, teamRuleNoteVersions } from "./team_rules.js";
 export { teamWikiPages, teamWikiPageVersions, TEAM_WIKI_SPACES, type TeamWikiSpace } from "./team_wiki.js";
+export { teamDocFanoutWatermarks } from "./team_doc_fanout_watermarks.js";
 export { workspaceAssetCitations } from "./workspace_asset_citations.js";
 export { recallEmbeddings } from "./recall_embeddings.js";
 export { recallQueries } from "./recall_queries.js";

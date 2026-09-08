@@ -93,6 +93,7 @@ import type {
   IssueDocument,
 } from "@paperclipai/shared";
 import {
+  SKILL_SIDECAR_FILENAME,
   isUuidLike,
   joinFrontmatterBlock,
   normalizeAgentUrlKey,
@@ -108,7 +109,17 @@ import { issueDocumentSelect, mapIssueDocumentRow } from "./documents.js";
 import { toIssueWorkProduct } from "./work-products.js";
 import { projectService } from "./projects.js";
 import { normalizePortablePath } from "./portable-path.js";
+import {
+  EmptySkillSnapshotError,
+  MissingRequiredSkillFileError,
+  materializeSkill,
+  type SkillSnapshotFile,
+} from "@paperclipai/skill-materializer";
 import { folderService } from "./folders.js";
+import {
+  publishSkillVersionPublished,
+  type SkillVersionPublishedEvent,
+} from "./skill-fanout.js";
 import {
   copyCatalogSkillFile,
   getCatalogPackageMetadata,
@@ -1127,6 +1138,7 @@ async function walkLocalFiles(root: string, current: string, out: string[]) {
   const entries = await fs.readdir(current, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name === ".git" || entry.name === "node_modules") continue;
+    if (entry.name === SKILL_SIDECAR_FILENAME) continue;
     const absolutePath = path.join(current, entry.name);
     if (entry.isDirectory()) {
       await walkLocalFiles(root, absolutePath, out);
@@ -1626,7 +1638,8 @@ async function readUrlSkillImports(
     const allPaths = (tree.tree ?? [])
       .filter((entry) => entry.type === "blob")
       .map((entry) => entry.path)
-      .filter((entry): entry is string => typeof entry === "string");
+      .filter((entry): entry is string => typeof entry === "string")
+      .filter((entry) => path.posix.basename(entry) !== SKILL_SIDECAR_FILENAME);
     const basePrefix = parsed.basePath ? `${parsed.basePath.replace(/^\/+|\/+$/g, "")}/` : "";
     const scopedPaths = basePrefix
       ? allPaths.filter((entry) => entry.startsWith(basePrefix))
@@ -2440,6 +2453,7 @@ async function collectSkillFileBytes(skillDir: string): Promise<{
   async function visit(current: string) {
     const entries = await fs.readdir(current, { withFileTypes: true }).catch(() => []);
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.name === SKILL_SIDECAR_FILENAME) continue;
       const absolutePath = path.resolve(current, entry.name);
       const relativePath = normalizePortablePath(path.relative(root, absolutePath));
       if (!relativePath || relativePath.split("/").includes("..") || path.isAbsolute(relativePath)) {
@@ -3582,6 +3596,10 @@ export function companySkillService(db: Db) {
     const fileInventory = serializeVersionFileInventory(
       options.fileInventory ?? await collectVersionFileInventory(companyId, skill),
     );
+    // Collected inside the transaction next to the update it describes, drained
+    // only after it commits — a rollback throws past the drain, so a failed
+    // write fans out nothing.
+    const postCommitFanout: SkillVersionPublishedEvent[] = [];
     const versionRow = await db.transaction(async (tx) => {
       await tx.execute(sql`
         select ${companySkills.id}
@@ -3618,10 +3636,12 @@ export function companySkillService(db: Db) {
           .update(companySkills)
           .set({ currentVersionId: row.id, updatedAt: new Date() })
           .where(and(eq(companySkills.id, skillId), eq(companySkills.companyId, companyId)));
+        postCommitFanout.push({ companyId, skillId, versionId: row.id });
       }
       return row;
     });
     if (!versionRow) throw notFound("Failed to persist skill version");
+    for (const event of postCommitFanout) publishSkillVersionPublished(db, event);
     return toCompanySkillVersion(versionRow);
   }
 
@@ -5747,118 +5767,62 @@ export function companySkillService(db: Db) {
     };
   }
 
+  // Both runtime directories are ours alone, so the snapshot is the whole truth
+  // and anything else under them is stale. That is what `sidecar` being absent
+  // buys: no conflict story, no bookkeeping file, content decides.
+  async function materializeSkillDir(
+    skillId: string,
+    skillDir: string,
+    files: readonly SkillSnapshotFile[],
+    missingSkillFileMessage: string,
+  ) {
+    try {
+      await materializeSkill({ skillId, targetDir: skillDir, files, requireFile: "SKILL.md" });
+    } catch (error) {
+      if (error instanceof MissingRequiredSkillFileError || error instanceof EmptySkillSnapshotError) {
+        throw unprocessable(missingSkillFileMessage);
+      }
+      throw error;
+    }
+    return skillDir;
+  }
+
   async function materializeRuntimeSkillFiles(companyId: string, skill: CompanySkill) {
     const runtimeRoot = path.resolve(resolveManagedSkillsRoot(companyId), "__runtime__");
     const skillDir = path.resolve(runtimeRoot, buildSkillRuntimeName(skill.key, skill.slug));
-    await fs.rm(skillDir, { recursive: true, force: true });
-    await fs.mkdir(skillDir, { recursive: true });
 
-    let wroteSkillFile = false;
+    const files: SkillSnapshotFile[] = [];
     for (const entry of skill.fileInventory) {
       const normalizedPath = normalizePortablePath(entry.path);
       const detail = await readFile(companyId, skill.id, normalizedPath).catch(() => null);
       const content = detail?.content ?? (normalizedPath === "SKILL.md" ? skill.markdown : null);
       if (content === null) continue;
-      const targetPath = path.resolve(skillDir, entry.path);
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.writeFile(targetPath, content, "utf8");
-      if (normalizedPath === "SKILL.md") wroteSkillFile = true;
-    }
-
-    if (!wroteSkillFile) {
-      await fs.rm(skillDir, { recursive: true, force: true });
-      throw unprocessable("Company skill could not be materialized because its stored SKILL.md copy is missing.");
-    }
-
-    return skillDir;
-  }
-
-  function resolveVersionSnapshotPath(skillDir: string, relativePath: string) {
-    const normalizedPath = normalizePortablePath(relativePath);
-    if (!normalizedPath) return null;
-    const targetPath = path.resolve(skillDir, normalizedPath);
-    if (targetPath !== skillDir && !targetPath.startsWith(`${skillDir}${path.sep}`)) {
-      throw unprocessable(`Skill version file path is invalid: ${relativePath}`);
-    }
-    return { normalizedPath, targetPath };
-  }
-
-  async function listMaterializedFiles(root: string): Promise<string[] | null> {
-    async function walk(dir: string, base: string): Promise<string[]> {
-      const entries = await fs.readdir(dir, { withFileTypes: true });
-      const out: string[] = [];
-      for (const entry of entries) {
-        const relativePath = base ? path.posix.join(base, entry.name) : entry.name;
-        const absolutePath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          out.push(...await walk(absolutePath, relativePath));
-        } else if (entry.isFile()) {
-          out.push(normalizePortablePath(relativePath));
-        } else {
-          out.push(normalizePortablePath(relativePath));
-        }
-      }
-      return out;
+      files.push({ path: normalizedPath, content });
     }
 
     try {
-      return await walk(root, "");
+      return await materializeSkillDir(
+        skill.id,
+        skillDir,
+        files,
+        "Company skill could not be materialized because its stored SKILL.md copy is missing.",
+      );
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      // The launcher reads this directory back by path, so an incomplete
+      // snapshot must not leave an older copy standing in for the real one.
+      await fs.rm(skillDir, { recursive: true, force: true }).catch(() => {});
       throw error;
     }
   }
 
-  async function materializedVersionSnapshotMatches(skillDir: string, version: CompanySkillVersion) {
-    const expected = new Map<string, string>();
-    let sawSkillFile = false;
-    for (const entry of version.fileInventory) {
-      const resolved = resolveVersionSnapshotPath(skillDir, entry.path);
-      if (!resolved) continue;
-      expected.set(resolved.normalizedPath, entry.content);
-      if (resolved.normalizedPath === "SKILL.md") sawSkillFile = true;
-    }
-    if (!sawSkillFile) {
-      throw unprocessable("Company skill version could not be materialized because its SKILL.md snapshot is missing.");
-    }
-
-    const existingFiles = await listMaterializedFiles(skillDir);
-    if (!existingFiles || existingFiles.length !== expected.size) return false;
-    for (const relativePath of existingFiles) {
-      if (!expected.has(relativePath)) return false;
-    }
-    for (const [relativePath, content] of expected.entries()) {
-      const existingContent = await fs.readFile(path.resolve(skillDir, relativePath), "utf8").catch(() => null);
-      if (existingContent !== content) return false;
-    }
-    return true;
-  }
-
   async function materializeVersionSnapshot(companyId: string, skill: CompanySkill, version: CompanySkillVersion) {
     const runtimeRoot = path.resolve(resolveManagedSkillsRoot(companyId), "__versions__");
-    const skillDir = path.resolve(runtimeRoot, skill.id, version.id);
-    if (await materializedVersionSnapshotMatches(skillDir, version)) {
-      return skillDir;
-    }
-    await fs.rm(skillDir, { recursive: true, force: true });
-    await fs.mkdir(skillDir, { recursive: true });
-
-    let wroteSkillFile = false;
-    for (const entry of version.fileInventory) {
-      const resolved = resolveVersionSnapshotPath(skillDir, entry.path);
-      if (!resolved) continue;
-      const { normalizedPath, targetPath } = resolved;
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.writeFile(targetPath, entry.content, "utf8");
-      if (normalizedPath === "SKILL.md") wroteSkillFile = true;
-    }
-
-    if (!wroteSkillFile) {
-      await fs.rm(skillDir, { recursive: true, force: true });
-      throw unprocessable("Company skill version could not be materialized because its SKILL.md snapshot is missing.");
-    }
-
-    return skillDir;
+    return materializeSkillDir(
+      skill.id,
+      path.resolve(runtimeRoot, skill.id, version.id),
+      version.fileInventory,
+      "Company skill version could not be materialized because its SKILL.md snapshot is missing.",
+    );
   }
 
   function resolveRuntimeSkillMaterializedPath(companyId: string, skill: Pick<CompanySkill, "key" | "slug">) {

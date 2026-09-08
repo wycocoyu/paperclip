@@ -1,12 +1,36 @@
+import { SKILL_SIDECAR_FILENAME } from "@paperclipai/shared";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 
-export const SKILL_SIDECAR = ".paperclip-skill.json";
+export const SKILL_SIDECAR = SKILL_SIDECAR_FILENAME;
 
 const IGNORED_SKILL_FILES: ReadonlySet<string> = new Set([SKILL_SIDECAR]);
 
-export function hashFileMap(files: Map<string, string>): string {
+// The sidecar is our own bookkeeping, so it counts as neither local content nor
+// remote content. Callers on both sides of the comparison filter through here.
+export function isIgnoredSkillFile(relativePath: string): boolean {
+  return IGNORED_SKILL_FILES.has(relativePath);
+}
+
+// Collapses a snapshot-supplied path to a relative POSIX path that cannot escape
+// the skill directory. Every writer normalizes through here so the server's
+// stored inventory and the CLI's on-disk view key off identical strings.
+export function normalizePortablePath(input: string): string {
+  const parts: string[] = [];
+  for (const segment of input.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "").split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (parts.length > 0) parts.pop();
+      continue;
+    }
+    parts.push(segment);
+  }
+  return parts.join("/");
+}
+
+export function hashFileMap(files: ReadonlyMap<string, string>): string {
   const hash = createHash("sha256");
   for (const filePath of [...files.keys()].sort()) {
     hash.update(filePath);
@@ -36,7 +60,7 @@ async function collectSkillDirFiles(
     .catch(() => []);
   for (const entry of entries) {
     const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-    if (IGNORED_SKILL_FILES.has(relativePath)) continue;
+    if (isIgnoredSkillFile(relativePath)) continue;
     if (entry.isDirectory()) {
       await collectSkillDirFiles(root, relativePath, files);
       continue;
@@ -61,4 +85,10 @@ export async function isDirectory(target: string): Promise<boolean> {
     .stat(target)
     .then((stats) => stats.isDirectory())
     .catch(() => false);
+}
+
+export function expandHome(value: string): string {
+  if (value === "~") return homedir();
+  if (value.startsWith("~/")) return path.join(homedir(), value.slice(2));
+  return path.resolve(value);
 }

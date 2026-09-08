@@ -60,6 +60,7 @@
     "@paperclipai/db": "workspace:*",
     "@paperclipai/plugin-sdk": "workspace:*",
     "@paperclipai/shared": "workspace:*",
+    "@paperclipai/skill-materializer": "workspace:*",
     "@paperclipai/skills-catalog": "workspace:*",
     "@paperclipai/hermes-paperclip-adapter": "workspace:*",
     "ajv": "^8.20.0",

@@ -20,6 +20,7 @@ const workspacePaths = [
   "cli",
   "packages/db",
   "packages/shared",
+  "packages/skill-materializer",
   "packages/adapter-utils",
   "packages/adapters/claude-local",
   "packages/adapters/codex-local",

@@ -1709,6 +1709,20 @@
       "when": 1788171411882,
       "tag": "0245_issue_reviewer_session",
       "breakpoints": true
+    },
+    {
+      "idx": 246,
+      "version": "7",
+      "when": 1788171411883,
+      "tag": "0246_team_doc_fanout_watermarks",
+      "breakpoints": true
+    },
+    {
+      "idx": 247,
+      "version": "7",
+      "when": 1788171411884,
+      "tag": "0247_team_doc_fanout_delivered_locator",
+      "breakpoints": true
     }
   ]
 }

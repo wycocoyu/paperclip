@@ -111,11 +111,14 @@ def newer(ts, since):
     return not since or (ts or "") > since
 
 
+# 渲染配对：`server/src/services/team-doc-ov-sink.ts` 在 MUL-559 第 4 步之后把同样两个
+# URI 从同样的数据渲染出来（观察期两个写入方并存），两边必须一起改，否则 OV 上的文件会
+# 在两种渲染之间反复翻转且不报任何错。
 def sync_rules(since):
     notes = rows(get(f"/api/companies/{COMPANY}/team-rules/notes"))
     changed = [n for n in notes if newer(n.get("updatedAt"), since)]
     if not changed:
-        return 0
+        return 0, 0
     full = "\n\n".join(n.get("body") or "" for n in notes)
     parts = re.split(r"\n(?=## )", full)
     head, res, act = [], [], []
@@ -125,16 +128,17 @@ def sync_rules(since):
             head.append(p); continue
         tag = t[3:]
         (act if any(tag.startswith(k) for k in ACTION_PREFIX) else res).append(p)
-    n = 0
-    n += ov_write("viking://resources/team/rules/resident/resident.md",
+    n = f = 0
+    ok = ov_write("viking://resources/team/rules/resident/resident.md",
                   "# Team Rules · 常驻组\n\n> 每轮生效，SessionStart 全文注入，不走召回。用户提问里没有词能召回它们，召回不到等于静默失效（MUL-515）。\n\n" + "\n".join(head) + "\n" + "\n".join(res))
-    n += ov_write("viking://resources/team/rules/action/action.md",
+    n, f = n + ok, f + (not ok)
+    ok = ov_write("viking://resources/team/rules/action/action.md",
                   "# Team Rules · 动作组\n\n> 挂在建卡 / 开分支 / 写卡 / 推状态 / 评审这些确定动作上，走 OV 按需召回（MUL-515）。\n\n" + "\n".join(act))
-    return n
+    return n + ok, f + (not ok)
 
 
 def sync_wiki(since):
-    n = 0
+    n = f = 0
     for space in ("paperclip", "agent"):
         for pg in rows(get(f"/api/companies/{COMPANY}/team-wiki/{space}/pages")):
             if not newer(pg.get("updatedAt"), since):
@@ -143,12 +147,13 @@ def sync_wiki(since):
             if not path.endswith(".md"):
                 path += ".md"
             body = f"# {pg.get('title','')}\n\n> source: paperclip team-wiki / {space} / {pg.get('path')}\n\n{pg.get('body') or ''}"
-            n += ov_write(f"viking://resources/team/wiki/{space}/{path}", body)
-    return n
+            ok = ov_write(f"viking://resources/team/wiki/{space}/{path}", body)
+            n, f = n + ok, f + (not ok)
+    return n, f
 
 
 def sync_skills(since):
-    n = 0
+    n = f = 0
     for s in rows(get(f"/api/companies/{COMPANY}/skills")):
         slug = s.get("slug") or s.get("key")
         if not slug or slug in SKIP_SKILLS or not newer(s.get("updatedAt"), since):
@@ -157,17 +162,18 @@ def sync_skills(since):
             f = get(f"/api/companies/{COMPANY}/skills/{s['id']}/files?path=SKILL.md")
             body = f.get("content") if isinstance(f, dict) else ""
         except Exception as e:
-            log(f"  ! skill {slug} 读不到 SKILL.md: {e}"); continue
+            log(f"  ! skill {slug} 读不到 SKILL.md: {e}"); f += 1; continue
         if not body:
             continue
         # write 覆盖已存在的；第一次不存在时 write 会建目录但不会按 skill 类型登记，
         # 所以先试 write，失败再走 add-skill 注册
-        n += ov_write(f"viking://agent/skills/{slug}/SKILL.md", body, on_missing="skill")
-    return n
+        ok = ov_write(f"viking://agent/skills/{slug}/SKILL.md", body, on_missing="skill")
+        n, f = n + ok, f + (not ok)
+    return n, f
 
 
 def sync_issues(since):
-    n = 0
+    n = f = 0
     issues = [i for i in rows(get(f"/api/companies/{COMPANY}/issues")) if i.get("status") == "done"]
     for iss in issues:
         if not newer(iss.get("updatedAt") or iss.get("completedAt"), since):
@@ -179,14 +185,16 @@ def sync_issues(since):
         head = (f"# {ident} {iss.get('title','')}\n\n"
                 f"> status: done · closed_at: {closed} · priority: {iss.get('priority')}\n"
                 f"> source: paperclip issue {ident}\n\n")
-        n += ov_write(f"{base}/issue.md", head + (iss.get("description") or ""))
+        ok = ov_write(f"{base}/issue.md", head + (iss.get("description") or ""))
+        n, f = n + ok, f + (not ok)
         try:
             docs = {d["key"]: d for d in rows(get(f"/api/issues/{iss['id']}/documents")) if d.get("key") in ISSUE_DOCS}
         except Exception as e:
-            log(f"  ! {ident} documents: {e}"); continue
+            log(f"  ! {ident} documents: {e}"); f += 1; continue
         for k, doc in docs.items():
-            n += ov_write(f"{base}/{k}.md", f"# {ident} · {k}\n\n> source: paperclip issue {ident} document {k}\n\n{doc.get('body') or ''}")
-    return n
+            ok = ov_write(f"{base}/{k}.md", f"# {ident} · {k}\n\n> source: paperclip issue {ident} document {k}\n\n{doc.get('body') or ''}")
+            n, f = n + ok, f + (not ok)
+    return n, f
 
 
 def main():
@@ -208,9 +216,19 @@ def main():
         if k not in kinds:
             continue
         try:
-            n = kinds[k](stamp.get(k))
-            stamp[k] = now
-            log(f"  {k}: 推了 {n} 个文件")
+            # The checkpoint is what says "everything up to here is in OV". A
+            # single failed ov_write used to be counted as 0 and the timestamp
+            # moved anyway, so that file was never retried — it stayed stale
+            # until the next unrelated edit or a --force. Hold the checkpoint
+            # for the whole kind instead: the next run re-pushes the ones that
+            # already landed (ov_write is an idempotent replace) and retries
+            # the one that did not.
+            n, f = kinds[k](stamp.get(k))
+            if f:
+                log(f"  {k}: 推了 {n} 个文件，{f} 个失败 → 时间戳不推进，下次重试")
+            else:
+                stamp[k] = now
+                log(f"  {k}: 推了 {n} 个文件")
         except Exception as e:
             log(f"  ! {k} 失败: {e}")
     os.makedirs(os.path.dirname(STAMP), exist_ok=True)

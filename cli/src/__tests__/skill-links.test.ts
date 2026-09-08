@@ -4,10 +4,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   containsPullManagedLinks,
+  cursorSkillsHome,
   ensureGitExcludeEntry,
   installSkillsForTarget,
   pruneTerminalSkillLinks,
   resolvePaperclipRepoRoot,
+  terminalSkillTargets,
 } from "../commands/client/skill-links.js";
 
 let root: string;
@@ -338,6 +340,62 @@ describe("pruneTerminalSkillLinks", () => {
       },
     ]);
     expect((await fs.readdir(targetDir)).sort()).toContain("dead");
+  });
+});
+
+/**
+ * Cursor reads two sets of links out of one directory: the plain slugs
+ * `skills pull` plants here, and `<slug>--<hash>` links the server's agent
+ * skill sync points at the managed source. Adding Cursor as a pull target has
+ * to leave the second set alone — it belongs to the other mechanism, and
+ * clearing it would silently unequip the agent.
+ */
+describe("cursor as a pull target", () => {
+  it("is one of the terminal targets, under ~/.cursor/skills", () => {
+    const cursor = terminalSkillTargets().find((entry) => entry.tool === "cursor");
+    expect(cursor?.dir).toBe(path.join(os.homedir(), ".cursor", "skills"));
+    expect(cursor?.dir).toBe(cursorSkillsHome());
+  });
+
+  it("honours CURSOR_HOME, which names the .cursor directory itself", () => {
+    const previous = process.env.CURSOR_HOME;
+    process.env.CURSOR_HOME = "/tmp/some-cursor";
+    try {
+      expect(cursorSkillsHome()).toBe(path.join("/tmp/some-cursor", "skills"));
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_HOME;
+      else process.env.CURSOR_HOME = previous;
+    }
+  });
+
+  it("plants the team slugs beside the server's managed-source links without disturbing them", async () => {
+    await writeSkill(teamDir, "team-grilling", "# grilling");
+    const managedRoot = path.join(root, "managed");
+    await writeSkill(managedRoot, "team-grilling", "# managed copy");
+    const managedLink = path.join(targetDir, "team-grilling--53750d66a4");
+    await fs.symlink(path.join(managedRoot, "team-grilling"), managedLink);
+
+    const summary = await installSkillsForTarget(sources(), targetDir, "cursor", { repoint: true });
+
+    expect(summary.tool).toBe("cursor");
+    expect(summary.linked).toEqual(["team-grilling"]);
+    expect((await fs.readdir(targetDir)).sort()).toEqual(["team-grilling", "team-grilling--53750d66a4"]);
+    expect(await fs.readlink(managedLink)).toBe(path.join(managedRoot, "team-grilling"));
+    expect(await fs.readlink(path.join(targetDir, "team-grilling"))).toBe(path.join(teamDir, "team-grilling"));
+  });
+
+  it("never prunes a managed-source link, even a dead one", async () => {
+    const managedRoot = path.join(root, "managed");
+    await fs.mkdir(managedRoot, { recursive: true });
+    const managedLink = path.join(targetDir, "team-grilling--53750d66a4");
+    await fs.symlink(path.join(managedRoot, "team-grilling"), managedLink);
+
+    // Pruning is scoped to links into skills-team; the managed source is a
+    // different root, so a dangling link there is not ours to clean up.
+    const rows = await pruneTerminalSkillLinks(targetDir, teamDir, { apply: true });
+
+    expect(rows).toEqual([]);
+    expect(await fs.readdir(targetDir)).toEqual(["team-grilling--53750d66a4"]);
   });
 });
 

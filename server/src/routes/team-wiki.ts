@@ -6,6 +6,10 @@ import { assertCompanyAccess, assertBoardOrAgent } from "./authz.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { getActorInfo } from "./authz.js";
 import { logActivity } from "../services/activity-log.js";
+import {
+  publishTeamWikiVersionPublished,
+  type TeamWikiVersionPublishedEvent,
+} from "../services/team-doc-fanout.js";
 
 /**
  * Team Wiki: durable team knowledge in two spaces — `paperclip` (written for
@@ -20,6 +24,7 @@ export function teamWikiRoutes(db: Db) {
   const router = Router();
 
   type Actor = ReturnType<typeof getActorInfo>;
+  type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
   function requireSpace(raw: string): (typeof TEAM_WIKI_SPACES)[number] {
     const space = TEAM_WIKI_SPACES.find((candidate) => candidate === raw);
@@ -51,7 +56,7 @@ export function teamWikiRoutes(db: Db) {
    * Append the next revision. The revision number is derived inside the insert
    * so two concurrent edits cannot both claim the same number.
    */
-  async function appendVersion(input: {
+  async function appendVersion(tx: Tx, input: {
     companyId: string;
     pageId: string;
     path: string;
@@ -60,7 +65,7 @@ export function teamWikiRoutes(db: Db) {
     label?: string | null;
     actor: Actor;
   }) {
-    const [version] = await db
+    const [version] = await tx
       .insert(teamWikiPageVersions)
       .values({
         companyId: input.companyId,
@@ -184,28 +189,37 @@ export function teamWikiRoutes(db: Db) {
     const path = normalizePath(req.body?.path ?? title);
     const body = typeof req.body?.body === "string" ? req.body.body : "";
     const actor = getActorInfo(req);
-    const [created] = await db
-      .insert(teamWikiPages)
-      .values({
+    // Collected inside the transaction next to the write it describes, drained
+    // only after it commits — a rollback throws past the drain, so a failed
+    // save fans out nothing and leaves no version behind either.
+    const postCommit: TeamWikiVersionPublishedEvent[] = [];
+    const created = await db.transaction(async (tx) => {
+      const [page] = await tx
+        .insert(teamWikiPages)
+        .values({
+          companyId,
+          space,
+          path,
+          title: title.slice(0, 200),
+          body,
+          createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+          createdByAgentId: actor.actorType === "agent" ? (actor.agentId ?? null) : null,
+        })
+        .returning()
+        .catch((error: unknown) => rethrowPathConflict(error, space, path));
+      const version = await appendVersion(tx, {
         companyId,
-        space,
-        path,
-        title: title.slice(0, 200),
-        body,
-        createdByUserId: actor.actorType === "user" ? actor.actorId : null,
-        createdByAgentId: actor.actorType === "agent" ? (actor.agentId ?? null) : null,
-      })
-      .returning()
-      .catch((error: unknown) => rethrowPathConflict(error, space, path));
-    await appendVersion({
-      companyId,
-      pageId: created.id,
-      path: created.path,
-      title: created.title,
-      body: created.body,
-      label: "Initial version",
-      actor,
+        pageId: page.id,
+        path: page.path,
+        title: page.title,
+        body: page.body,
+        label: "Initial version",
+        actor,
+      });
+      postCommit.push({ companyId, pageId: page.id, versionId: version.id });
+      return page;
     });
+    for (const event of postCommit) publishTeamWikiVersionPublished(db, event);
     await logActivity(db, {
       companyId,
       actorType: actor.actorType,
@@ -231,28 +245,36 @@ export function teamWikiRoutes(db: Db) {
     if (typeof req.body?.title === "string" && req.body.title.trim()) patch.title = req.body.title.trim().slice(0, 200);
     if (typeof req.body?.body === "string") patch.body = req.body.body;
     if (req.body?.path !== undefined) patch.path = normalizePath(req.body.path);
-    const [updated] = await db
-      .update(teamWikiPages)
-      .set(patch)
-      .where(and(eq(teamWikiPages.id, pageId), eq(teamWikiPages.companyId, companyId)))
-      .returning()
-      .catch((error: unknown) => rethrowPathConflict(error, existing.space, String(patch.path ?? existing.path)));
-    if (!updated) throw notFound("Page not found");
     const actor = getActorInfo(req);
-    const changed = updated.title !== existing.title
-      || updated.body !== existing.body
-      || updated.path !== existing.path;
-    if (changed) {
-      await appendVersion({
-        companyId,
-        pageId,
-        path: updated.path,
-        title: updated.title,
-        body: updated.body,
-        label: typeof req.body?.versionLabel === "string" ? req.body.versionLabel.trim().slice(0, 200) || null : null,
-        actor,
-      });
-    }
+    const postCommit: TeamWikiVersionPublishedEvent[] = [];
+    const updated = await db.transaction(async (tx) => {
+      const [page] = await tx
+        .update(teamWikiPages)
+        .set(patch)
+        .where(and(eq(teamWikiPages.id, pageId), eq(teamWikiPages.companyId, companyId)))
+        .returning()
+        .catch((error: unknown) => rethrowPathConflict(error, existing.space, String(patch.path ?? existing.path)));
+      if (!page) throw notFound("Page not found");
+      const changed = page.title !== existing.title
+        || page.body !== existing.body
+        || page.path !== existing.path;
+      if (changed) {
+        const version = await appendVersion(tx, {
+          companyId,
+          pageId,
+          path: page.path,
+          title: page.title,
+          body: page.body,
+          label: typeof req.body?.versionLabel === "string"
+            ? req.body.versionLabel.trim().slice(0, 200) || null
+            : null,
+          actor,
+        });
+        postCommit.push({ companyId, pageId, versionId: version.id });
+      }
+      return page;
+    });
+    for (const event of postCommit) publishTeamWikiVersionPublished(db, event);
     await logActivity(db, {
       companyId,
       actorType: actor.actorType,
@@ -303,23 +325,30 @@ export function teamWikiRoutes(db: Db) {
           ),
         );
       if (!version) throw notFound("Version not found");
-      const [updated] = await db
-        .update(teamWikiPages)
-        .set({ path: version.path, title: version.title, body: version.body, updatedAt: new Date() })
-        .where(and(eq(teamWikiPages.id, pageId), eq(teamWikiPages.companyId, companyId)))
-        .returning();
       const actor = getActorInfo(req);
-      // A restore is itself an edit: it lands as a new revision on top rather
-      // than rewinding history, so the rollback stays auditable.
-      await appendVersion({
-        companyId,
-        pageId,
-        path: updated.path,
-        title: updated.title,
-        body: updated.body,
-        label: `Restored from v${revisionNumber}`,
-        actor,
+      const postCommit: TeamWikiVersionPublishedEvent[] = [];
+      const updated = await db.transaction(async (tx) => {
+        const [page] = await tx
+          .update(teamWikiPages)
+          .set({ path: version.path, title: version.title, body: version.body, updatedAt: new Date() })
+          .where(and(eq(teamWikiPages.id, pageId), eq(teamWikiPages.companyId, companyId)))
+          .returning();
+        if (!page) throw notFound("Page not found");
+        // A restore is itself an edit: it lands as a new revision on top rather
+        // than rewinding history, so the rollback stays auditable.
+        const appended = await appendVersion(tx, {
+          companyId,
+          pageId,
+          path: page.path,
+          title: page.title,
+          body: page.body,
+          label: `Restored from v${revisionNumber}`,
+          actor,
+        });
+        postCommit.push({ companyId, pageId, versionId: appended.id });
+        return page;
       });
+      for (const event of postCommit) publishTeamWikiVersionPublished(db, event);
       await logActivity(db, {
         companyId,
         actorType: actor.actorType,
@@ -369,6 +398,10 @@ export function teamWikiRoutes(db: Db) {
       .where(and(eq(teamWikiPages.id, pageId), eq(teamWikiPages.companyId, companyId)))
       .returning();
     if (!updated) throw notFound("Page not found");
+    // Archiving hides the page here but not downstream: without this the
+    // OpenViking copy keeps answering recalls for a page the team retired
+    // (MUL-566). Unarchiving publishes for the same reason, in reverse.
+    publishTeamWikiVersionPublished(db, { companyId, pageId });
     await logActivity(db, {
       companyId,
       actorType: actor.actorType,
@@ -402,6 +435,7 @@ export function teamWikiRoutes(db: Db) {
       .where(and(eq(teamWikiPages.id, pageId), eq(teamWikiPages.companyId, companyId)))
       .returning();
     if (!deleted) throw notFound("Page not found");
+    publishTeamWikiVersionPublished(db, { companyId, pageId });
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId,

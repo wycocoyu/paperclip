@@ -4,6 +4,11 @@ export type CompanyStatus = (typeof COMPANY_STATUSES)[number];
 export const DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 export const MAX_COMPANY_ATTACHMENT_MAX_BYTES = 1024 * 1024 * 1024;
 
+// Client bookkeeping a materialized skill directory carries; never skill content.
+// Any scan that builds a skill's file inventory must skip it, or the server hands
+// it back as a file and every client pull reports phantom local drift.
+export const SKILL_SIDECAR_FILENAME = ".paperclip-skill.json";
+
 export const DEPLOYMENT_MODES = ["local_trusted", "authenticated"] as const;
 export type DeploymentMode = (typeof DEPLOYMENT_MODES)[number];
 
