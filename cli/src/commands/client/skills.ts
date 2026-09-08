@@ -47,9 +47,12 @@ import {
 import {
   SKILLS_PULL_HINT,
   printSkillsPullResult,
+  resolveSkillsPullRoot,
   runSkillsPull,
   type SkillsPullOptions,
 } from "./skills-pull.js";
+import { collectSkillsStatus, printSkillsStatus } from "./skills-status.js";
+import { collectSkillsUsage, printSkillsUsage } from "./skills-usage.js";
 
 export {
   materializeCompanySkills,
@@ -648,6 +651,54 @@ export function registerSkillsCommands(program: Command): void {
       }),
     { includeCompany: true },
   );
+
+  // One line per skill answering the three questions that otherwise take an
+  // `ls -la` across five directories: where is it projected, was it edited
+  // locally, is the server failing to deliver it.
+  addCommonClientOptions(
+    skills
+      .command("status")
+      .description("Show per-terminal projection, local drift, and fan-out failures for every skill")
+      .action(async (opts: SkillsOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts, { requireCompany: true });
+          const result = await collectSkillsStatus(ctx, await resolveSkillsPullRoot());
+          if (ctx.json) {
+            printOutput(result, { json: true });
+            return;
+          }
+          printSkillsStatus(result);
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+    { includeCompany: true },
+  );
+
+  // Local-only: it reads this machine's transcripts and talks to no server, so
+  // it stays out of resolveCommandContext and works with the server down.
+  skills
+    .command("usage")
+    .description("Count explicit Skill tool calls per skill, grouped by harness (this machine only)")
+    .option("--days <n>", "Only scan session files written within the last N days", "30")
+    .option("--no-cache", "Ignore and rewrite the incremental scan cache")
+    .option("--json", "Output raw JSON")
+    .action(async (opts: { days: string; cache: boolean; json?: boolean }) => {
+      try {
+        const days = Number.parseInt(opts.days, 10);
+        if (!Number.isFinite(days) || days <= 0) {
+          throw new Error(`--days must be a positive integer, got "${opts.days}".`);
+        }
+        const result = await collectSkillsUsage({ days, cache: opts.cache });
+        if (opts.json) {
+          printOutput(result, { json: true });
+          return;
+        }
+        printSkillsUsage(result);
+      } catch (err) {
+        handleCommandError(err);
+      }
+    });
 
   registerAgentSkillCommands(skills);
 }

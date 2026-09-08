@@ -162,7 +162,7 @@ export async function materializeSkill(
         note: "change markers refreshed",
       };
     }
-    const drift = await detectLocalDrift(targetDir, current, snapshot);
+    const drift = await detectSkillDirDrift(targetDir, current, snapshot);
     if (drift && !force) {
       return {
         status: "skipped-local-modified",
@@ -218,19 +218,25 @@ async function write(
   });
 }
 
-async function detectLocalDrift(
+/**
+ * Whether the bytes on disk still match what the last sync wrote, described in
+ * words when they do not. `snapshot` is the remote content when the caller has
+ * just fetched it; a reader that only wants "was this edited locally" (the
+ * `skills status` column) omits it and the sidecar alone decides.
+ */
+export async function detectSkillDirDrift(
   skillDir: string,
   sidecar: SkillSidecar,
-  snapshot: ReadonlyMap<string, string>,
+  snapshot?: ReadonlyMap<string, string>,
 ): Promise<string | null> {
   const onDisk = await readSkillDirFiles(skillDir);
   // Disk that already equals the remote is not a local edit, whatever the
   // sidecar hash claims — an older sidecar could have hashed files we no longer
   // read back, so the recorded hash can be wrong while the bytes are identical.
-  if (hashFileMap(onDisk) === hashFileMap(snapshot)) return null;
+  if (snapshot && hashFileMap(onDisk) === hashFileMap(snapshot)) return null;
   // Sidecars written before file tracking only ever knew the remote inventory,
   // so compare within that set rather than flagging pre-existing extras.
-  const tracked = sidecar.files ?? [...snapshot.keys()];
+  const tracked = sidecar.files ?? [...(snapshot?.keys() ?? onDisk.keys())];
   const trackedSet = new Set(tracked);
   if (sidecar.files) {
     const added = [...onDisk.keys()].filter((filePath) => !trackedSet.has(filePath));

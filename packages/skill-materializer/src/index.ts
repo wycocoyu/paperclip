@@ -27,6 +27,7 @@ export {
   EmptySkillSnapshotError,
   MissingRequiredSkillFileError,
   buildSnapshotFileMap,
+  detectSkillDirDrift,
   materializeSkill,
   type MaterializeSkillInput,
   type MaterializeSkillResult,

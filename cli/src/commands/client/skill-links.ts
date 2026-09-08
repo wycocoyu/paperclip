@@ -159,7 +159,7 @@ export async function resolveSkillLinkSources(
   return { links: [...links.values()], shadowed };
 }
 
-interface SkillLinkInspection {
+export interface SkillLinkInspection {
   state: "absent" | "correct" | "dangling" | "elsewhere" | "occupied";
   linkedTo?: string;
 }
@@ -167,7 +167,7 @@ interface SkillLinkInspection {
 // The authoritative source for a slug is whichever configured source claims it
 // first, so correctness is "points at that exact path" — never "points anywhere
 // under a source root".
-async function inspectSkillLink(target: string, source: string): Promise<SkillLinkInspection> {
+export async function inspectSkillLink(target: string, source: string): Promise<SkillLinkInspection> {
   const existing = await fs.lstat(target).catch(() => null);
   if (!existing) return { state: "absent" };
   if (!existing.isSymbolicLink()) return { state: "occupied" };
