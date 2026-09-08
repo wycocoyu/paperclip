@@ -33,6 +33,7 @@ import {
   heartbeatService,
   issueService,
   logActivity,
+  skillFanoutFailures,
 } from "../services/index.js";
 import { isGitRepoSkillImportSource, parseSkillImportSourceInput } from "../services/company-skills.js";
 import {
@@ -334,6 +335,16 @@ export function companySkillRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     res.json(await svc.categoryCounts(companyId));
+  });
+
+  // Read-only view of skill fan-out deliveries that exhausted their retries
+  // (drift conflicts included). Registered before the :skillId routes so the
+  // literal segment is not captured as a skill id. In-memory only: the list
+  // resets on restart, which startup reconciliation then rebuilds from disk.
+  router.get("/companies/:companyId/skills/fanout-failures", (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json({ failures: skillFanoutFailures(companyId) });
   });
 
   router.get("/companies/:companyId/skills/:skillId", async (req, res) => {

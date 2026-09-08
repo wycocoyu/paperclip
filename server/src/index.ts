@@ -57,9 +57,11 @@ import {
   issueThreadInteractionService,
   issueService,
   instanceSettingsService,
+  configureSkillFanout,
   reconcileBuiltInAgentsOnStartup,
   reconcileCodexLocalManagedHomesOnStartup,
   reconcilePersistedRuntimeServicesOnStartup,
+  reconcileSkillFanoutOnStartup,
   routineService,
   statusCardService,
   toolAccessService,
@@ -972,6 +974,20 @@ export async function startServer(): Promise<StartedServer> {
     })
     .catch((err) => {
       logger.error({ err }, "startup reconciliation of codex_local managed homes failed");
+    });
+
+  // Skill fan-out is armed before the sweep so a publish racing startup queues
+  // rather than vanishing, and the sweep itself covers the window between a
+  // commit and a fan-out the previous process never got to run.
+  configureSkillFanout(config.skillsTeamProjection);
+  void reconcileSkillFanoutOnStartup(db)
+    .then((result) => {
+      if (result.queued > 0) {
+        logger.warn(result, "startup reconciliation queued skill fan-out for drifted skills");
+      }
+    })
+    .catch((err) => {
+      logger.error({ err }, "startup reconciliation of skill fan-out failed");
     });
 
   void reconcileBuiltInAgentsOnStartup(db as any)

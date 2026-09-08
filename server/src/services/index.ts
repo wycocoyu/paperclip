@@ -192,4 +192,9 @@ export {
   type CodexAuthReconciliationSummary,
 } from "./codex-auth-reconciliation.js";
 export { reconcilePersistedRuntimeServicesOnStartup, restartDesiredRuntimeServicesOnStartup } from "./workspace-runtime.js";
+export {
+  configureSkillFanout,
+  reconcileSkillFanoutOnStartup,
+  skillFanoutFailures,
+} from "./skill-fanout.js";
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";

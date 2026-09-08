@@ -20,6 +20,8 @@ All environment variables that Paperclip uses for server configuration.
 | `PAPERCLIP_DEPLOYMENT_EXPOSURE` | `private` | Exposure policy when deployment mode is `authenticated` |
 | `PAPERCLIP_API_URL` | (auto-derived) | Paperclip API base URL. When set externally (e.g., via Kubernetes ConfigMap, load balancer, or reverse proxy), the server preserves the value instead of deriving it from the listen host and port. Useful for deployments where the public-facing URL differs from the local bind address. |
 | `PAPERCLIP_HIDDEN_SETTINGS` | (unset) | Comma-separated settings surfaces to hide from the UI and floor at the API, for operators hosting Paperclip for others (managed cloud, internal shared server). See [Hiding settings surfaces](#hiding-settings-surfaces). |
+| `PAPERCLIP_SKILLS_TEAM_DIR` | (unset) | Absolute path (or `~`-prefixed) of the `skills-team` directory the server projects committed skill versions into after each version commit (MUL-559). Must be set together with `PAPERCLIP_SKILLS_TEAM_COMPANY_ID` — both or neither; half a configuration refuses to boot. Both unset = fan-out disabled. Uses the same pull lock and directory layout as the CLI `skills pull`. |
+| `PAPERCLIP_SKILLS_TEAM_COMPANY_ID` | (unset) | UUID of the company whose skills fan out to `PAPERCLIP_SKILLS_TEAM_DIR`. See `PAPERCLIP_SKILLS_TEAM_DIR` for the pairing rule. Terminal fan-out failures (e.g. drift conflicts) surface at `GET /api/companies/:companyId/skills/fanout-failures`. |
 
 ### Hiding settings surfaces
 

@@ -117,6 +117,10 @@ import {
 } from "@paperclipai/skill-materializer";
 import { folderService } from "./folders.js";
 import {
+  publishSkillVersionPublished,
+  type SkillVersionPublishedEvent,
+} from "./skill-fanout.js";
+import {
   copyCatalogSkillFile,
   getCatalogPackageMetadata,
   getCatalogSkillOrThrow,
@@ -3592,6 +3596,10 @@ export function companySkillService(db: Db) {
     const fileInventory = serializeVersionFileInventory(
       options.fileInventory ?? await collectVersionFileInventory(companyId, skill),
     );
+    // Collected inside the transaction next to the update it describes, drained
+    // only after it commits — a rollback throws past the drain, so a failed
+    // write fans out nothing.
+    const postCommitFanout: SkillVersionPublishedEvent[] = [];
     const versionRow = await db.transaction(async (tx) => {
       await tx.execute(sql`
         select ${companySkills.id}
@@ -3628,10 +3636,12 @@ export function companySkillService(db: Db) {
           .update(companySkills)
           .set({ currentVersionId: row.id, updatedAt: new Date() })
           .where(and(eq(companySkills.id, skillId), eq(companySkills.companyId, companyId)));
+        postCommitFanout.push({ companyId, skillId, versionId: row.id });
       }
       return row;
     });
     if (!versionRow) throw notFound("Failed to persist skill version");
+    for (const event of postCommitFanout) publishSkillVersionPublished(db, event);
     return toCompanySkillVersion(versionRow);
   }
 
