@@ -679,7 +679,7 @@ export function registerSkillsCommands(program: Command): void {
   // it stays out of resolveCommandContext and works with the server down.
   skills
     .command("usage")
-    .description("Count explicit Skill tool calls per skill, grouped by harness (this machine only)")
+    .description("Count skill usage per skill, grouped by harness — explicit Skill tool calls for claude/zcode, sessions that read SKILL.md for codex (this machine only)")
     .option("--days <n>", "Only scan session files written within the last N days", "30")
     .option("--no-cache", "Ignore and rewrite the incremental scan cache")
     .option("--json", "Output raw JSON")

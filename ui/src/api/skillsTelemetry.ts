@@ -52,9 +52,11 @@ export interface SkillsStatusResult {
 }
 
 export const skillsTelemetryApi = {
-  usage: (companyId: string, days: number) =>
+  // `refresh` bypasses both the server's 60s memory answer and the on-disk
+  // per-file scan cache — the wire form of the CLI's `--no-cache`.
+  usage: (companyId: string, days: number, opts: { refresh?: boolean } = {}) =>
     api.get<SkillsUsageResult>(
-      `/companies/${encodeURIComponent(companyId)}/skills/usage?days=${days}`,
+      `/companies/${encodeURIComponent(companyId)}/skills/usage?days=${days}${opts.refresh ? "&refresh=1" : ""}`,
     ),
   localStatus: (companyId: string) =>
     api.get<SkillsStatusResult>(`/companies/${encodeURIComponent(companyId)}/skills/local-status`),

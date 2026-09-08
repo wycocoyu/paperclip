@@ -36,25 +36,42 @@ export function skillsUsageCacheReset(): void {
   usageInFlight.clear();
 }
 
-export async function skillsUsage(days: number, now = Date.now()): Promise<SkillsUsageResult> {
-  const fresh = usageByDays.get(days);
-  if (fresh && now - fresh.at < USAGE_TTL_MS) return fresh.result;
+/**
+ * `refresh` is the page's Refresh button and the CLI's `--no-cache`: it skips
+ * the TTL above *and* the on-disk per-file cache, so a scan that some other
+ * process warmed is not what the reader gets back. It also skips the in-flight
+ * share — joining a scan already running under the old caches would answer a
+ * refresh with the very numbers it was asked to bypass.
+ */
+export async function skillsUsage(
+  days: number,
+  now = Date.now(),
+  opts: { refresh?: boolean } = {},
+): Promise<SkillsUsageResult> {
+  if (!opts.refresh) {
+    const fresh = usageByDays.get(days);
+    if (fresh && now - fresh.at < USAGE_TTL_MS) return fresh.result;
 
-  const running = usageInFlight.get(days);
-  if (running) return running;
+    const running = usageInFlight.get(days);
+    if (running) return running;
+  }
 
   // `cache: true` shares ~/.paperclip/skills-usage-cache.json with the CLI: the
   // per-file entries are keyed by mtime+size, so whichever process parsed a
   // transcript first spares the other.
   // Stamped with the clock the request came in on, so the window is bounded from
   // the moment the scan started rather than whenever it happened to finish.
-  const scan = collectSkillsUsage({ days, cache: true })
-    .then((result) => {
-      usageByDays.set(days, { at: now, result });
-      return result;
-    })
-    .finally(() => usageInFlight.delete(days));
-  usageInFlight.set(days, scan);
+  const scan = collectSkillsUsage({ days, cache: !opts.refresh }).then((result) => {
+    usageByDays.set(days, { at: now, result });
+    return result;
+  });
+  // A refresh stays out of the shared slot in both directions: it must not be
+  // handed to a plain reader that asked for a cached answer, and its `finally`
+  // must not evict a plain scan that is still running under the same key.
+  if (!opts.refresh) {
+    usageInFlight.set(days, scan);
+    void scan.finally(() => usageInFlight.delete(days)).catch(() => {});
+  }
   return scan;
 }
 

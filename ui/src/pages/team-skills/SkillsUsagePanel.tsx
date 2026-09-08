@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { skillsTelemetryApi, type SkillsUsageResult, type UsageHarness } from "@/api/skillsTelemetry";
 import { cn } from "@/lib/utils";
 
@@ -7,13 +7,12 @@ const WINDOWS = [7, 30, 90, 365] as const;
 const HARNESSES: UsageHarness[] = ["claude", "codex", "zcode"];
 
 /**
- * The counting rule is frozen (MUL-553/MUL-570): only explicit Skill tool calls
- * count. Codex consumes skills by reading SKILL.md with `sed`, which emits no
- * such call, so its column is structurally zero — say that beside the number or
- * it reads as "nobody uses skills in Codex".
+ * Two calibres in one table (MUL-581). Claude and ZCode count explicit Skill
+ * tool calls; Codex has no Skill tool, so it counts sessions that read the
+ * skill's SKILL.md. Left unsaid, the sum reads as one measurement.
  */
-export const CODEX_ZERO_NOTE =
-  "Codex 一列结构性为 0：它没有 Skill 工具，消费技能靠直接读 SKILL.md，被口径（只算显式 Skill 调用）排除。这不是「Codex 没人用技能」。";
+export const CODEX_CALIBER_NOTE =
+  "两列口径不同：claude / zcode 数的是显式 Skill 工具调用（同一会话内调 N 次算 N 次）；codex 没有 Skill 工具，数的是「读过该技能 SKILL.md 的会话数」（一个会话里读多少遍都算 1）。量级可比，单位不可比。";
 
 function usageBar(total: number, max: number): string {
   return max > 0 ? `${Math.max(2, Math.round((total / max) * 100))}%` : "0%";
@@ -21,14 +20,25 @@ function usageBar(total: number, max: number): string {
 
 export function SkillsUsagePanel({ companyId }: { companyId: string }) {
   const [days, setDays] = useState<number>(30);
+  const queryClient = useQueryClient();
+  const queryKey = ["skills-telemetry", "usage", companyId, days];
   const query = useQuery<SkillsUsageResult>({
-    queryKey: ["skills-telemetry", "usage", companyId, days],
+    queryKey,
     queryFn: () => skillsTelemetryApi.usage(companyId, days),
     // A cold scan walks every transcript on the box; refetching on focus would
     // pay that again for a page nobody changed.
     refetchOnWindowFocus: false,
     staleTime: 60_000,
   });
+
+  // Written straight into the query cache rather than invalidating: an
+  // invalidate would refetch *without* `refresh`, and the server would answer
+  // that second request from the memory entry this scan just filled.
+  const refresh = useMutation({
+    mutationFn: () => skillsTelemetryApi.usage(companyId, days, { refresh: true }),
+    onSuccess: (result) => queryClient.setQueryData(queryKey, result),
+  });
+  const busy = query.isFetching || refresh.isPending;
 
   const result = query.data;
   const max = result?.skills[0]?.total ?? 0;
@@ -59,13 +69,27 @@ export function SkillsUsagePanel({ companyId }: { companyId: string }) {
             {option} 天
           </button>
         ))}
-        {query.isFetching ? (
-          <span className="text-xs text-muted-foreground">扫描中…（首次可能要 20 秒以上）</span>
+        <button
+          type="button"
+          onClick={() => refresh.mutate()}
+          disabled={busy}
+          data-testid="skills-usage-refresh"
+          className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {refresh.isPending ? "刷新中…" : "刷新"}
+        </button>
+        {busy ? (
+          <span className="text-xs text-muted-foreground">
+            {refresh.isPending ? "正在跳过缓存全量重扫…（约 20 秒）" : "扫描中…（首次可能要 20 秒以上）"}
+          </span>
         ) : null}
       </div>
 
       {query.isError ? (
         <p className="text-sm text-destructive">读取失败：{(query.error as Error).message}</p>
+      ) : null}
+      {refresh.isError ? (
+        <p className="text-sm text-destructive">刷新失败：{(refresh.error as Error).message}</p>
       ) : null}
 
       {result ? (
@@ -77,7 +101,7 @@ export function SkillsUsagePanel({ companyId }: { companyId: string }) {
                   <th className="px-3 py-2 text-left font-medium">技能</th>
                   <th className="px-3 py-2 text-right font-medium">合计</th>
                   <th className="px-3 py-2 text-right font-medium">claude</th>
-                  <th className="px-3 py-2 text-right font-medium" title={CODEX_ZERO_NOTE}>
+                  <th className="px-3 py-2 text-right font-medium" title={CODEX_CALIBER_NOTE}>
                     codex <span className="text-muted-foreground">*</span>
                   </th>
                   <th className="px-3 py-2 text-right font-medium">zcode</th>
@@ -110,7 +134,7 @@ export function SkillsUsagePanel({ companyId }: { companyId: string }) {
             —— 窗口内 {scannedFiles} 个会话文件，其中 {parsedFiles} 个本次解析（其余走缓存）。仅本机，子 Agent 计入。
           </p>
           <p className="text-xs text-muted-foreground" data-testid="codex-caliber-note">
-            * {CODEX_ZERO_NOTE}
+            * {CODEX_CALIBER_NOTE}
           </p>
           {result.unreadable.length > 0 ? (
             <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">

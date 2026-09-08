@@ -38,16 +38,22 @@ describe("skill telemetry routes", () => {
     const res = await request(app()).get(`/api/companies/${COMPANY}/skills/usage?days=7`);
     expect(res.status).toBe(200);
     expect(res.body.totalCalls).toBe(7);
-    expect(skillsUsage).toHaveBeenCalledWith(7);
+    expect(skillsUsage).toHaveBeenCalledWith(7, expect.any(Number), { refresh: false });
   });
 
   it("defaults the window to 30 days and rejects a non-positive one", async () => {
     skillsUsage.mockResolvedValue({ days: 30, totalCalls: 0, skills: [] });
     await request(app()).get(`/api/companies/${COMPANY}/skills/usage`);
-    expect(skillsUsage).toHaveBeenCalledWith(30);
+    expect(skillsUsage).toHaveBeenCalledWith(30, expect.any(Number), { refresh: false });
 
     const bad = await request(app()).get(`/api/companies/${COMPANY}/skills/usage?days=0`);
     expect(bad.status).toBe(400);
+  });
+
+  it("passes the page's Refresh button through as a cache bypass", async () => {
+    skillsUsage.mockResolvedValue({ days: 30, totalCalls: 0, skills: [] });
+    await request(app()).get(`/api/companies/${COMPANY}/skills/usage?days=30&refresh=1`);
+    expect(skillsUsage).toHaveBeenCalledWith(30, expect.any(Number), { refresh: true });
   });
 
   it("answers 404 when there is no checkout, never an empty and therefore clean table", async () => {
