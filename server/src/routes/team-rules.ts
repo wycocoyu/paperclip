@@ -6,6 +6,11 @@ import { assertCompanyAccess, assertBoardOrAgent } from "./authz.js";
 import { badRequest, notFound } from "../errors.js";
 import { getActorInfo } from "./authz.js";
 import { logActivity } from "../services/activity-log.js";
+import {
+  publishTeamRuleVersionPublished,
+  teamDocFanoutFailures,
+  type TeamRuleVersionPublishedEvent,
+} from "../services/team-doc-fanout.js";
 
 /**
  * Team Rules: the company's shared rule text. Notes are the only Team
@@ -21,6 +26,7 @@ export function teamRulesRoutes(db: Db) {
   const router = Router();
 
   type Actor = ReturnType<typeof getActorInfo>;
+  type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
   /**
    * Append the next revision for a note. The revision number is derived inside
@@ -28,7 +34,7 @@ export function teamRulesRoutes(db: Db) {
    * unique (note_id, revision_number) index would reject the loser anyway, but
    * deriving it here keeps the common path to a single round trip.
    */
-  async function appendVersion(input: {
+  async function appendVersion(tx: Tx, input: {
     companyId: string;
     noteId: string;
     title: string;
@@ -36,7 +42,7 @@ export function teamRulesRoutes(db: Db) {
     label?: string | null;
     actor: Actor;
   }) {
-    const [version] = await db
+    const [version] = await tx
       .insert(teamRuleNoteVersions)
       .values({
         companyId: input.companyId,
@@ -64,6 +70,17 @@ export function teamRulesRoutes(db: Db) {
     if (!note) throw notFound("Note not found");
     return note;
   }
+
+  // Read-only view of Rules *and* Wiki fan-out deliveries that exhausted their
+  // retries. One endpoint because they share one queue; it lives here rather
+  // than in a file of its own. In-memory only: the list resets on restart, and
+  // nothing rebuilds it — OpenViking has no local marker to reconcile against,
+  // so a parked delivery is recovered by the next save or by ov-sync.
+  router.get("/companies/:companyId/team-docs/fanout-failures", (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json({ failures: teamDocFanoutFailures(companyId) });
+  });
 
   router.get("/companies/:companyId/team-rules/notes", async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -114,25 +131,34 @@ export function teamRulesRoutes(db: Db) {
       throw badRequest("Team Rules keeps a single document — edit the existing note instead of creating another");
     }
     const actor = getActorInfo(req);
-    const [created] = await db
-      .insert(teamRuleNotes)
-      .values({
+    // Collected inside the transaction next to the write it describes, drained
+    // only after it commits — a rollback throws past the drain, so a failed
+    // save fans out nothing and leaves no version behind either.
+    const postCommit: TeamRuleVersionPublishedEvent[] = [];
+    const created = await db.transaction(async (tx) => {
+      const [note] = await tx
+        .insert(teamRuleNotes)
+        .values({
+          companyId,
+          title: title.slice(0, 200),
+          body,
+          position,
+          createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+          createdByAgentId: actor.actorType === "agent" ? (actor.agentId ?? null) : null,
+        })
+        .returning();
+      const version = await appendVersion(tx, {
         companyId,
-        title: title.slice(0, 200),
-        body,
-        position,
-        createdByUserId: actor.actorType === "user" ? actor.actorId : null,
-        createdByAgentId: actor.actorType === "agent" ? (actor.agentId ?? null) : null,
-      })
-      .returning();
-    await appendVersion({
-      companyId,
-      noteId: created.id,
-      title: created.title,
-      body: created.body,
-      label: "Initial version",
-      actor,
+        noteId: note.id,
+        title: note.title,
+        body: note.body,
+        label: "Initial version",
+        actor,
+      });
+      postCommit.push({ companyId, noteId: note.id, versionId: version.id });
+      return note;
     });
+    for (const event of postCommit) publishTeamRuleVersionPublished(db, event);
     await logActivity(db, {
       companyId,
       actorType: actor.actorType,
@@ -157,26 +183,34 @@ export function teamRulesRoutes(db: Db) {
     if (typeof req.body?.title === "string" && req.body.title.trim()) patch.title = req.body.title.trim().slice(0, 200);
     if (typeof req.body?.body === "string") patch.body = req.body.body;
     if (typeof req.body?.position === "number") patch.position = req.body.position;
-    const [updated] = await db
-      .update(teamRuleNotes)
-      .set(patch)
-      .where(and(eq(teamRuleNotes.id, noteId), eq(teamRuleNotes.companyId, companyId)))
-      .returning();
-    if (!updated) throw notFound("Note not found");
     const actor = getActorInfo(req);
-    // Reordering is not a rule change, so only text edits earn a revision —
-    // otherwise a drag-to-reorder would bury the history in empty versions.
-    const textChanged = updated.title !== existing.title || updated.body !== existing.body;
-    if (textChanged) {
-      await appendVersion({
-        companyId,
-        noteId,
-        title: updated.title,
-        body: updated.body,
-        label: typeof req.body?.versionLabel === "string" ? req.body.versionLabel.trim().slice(0, 200) || null : null,
-        actor,
-      });
-    }
+    const postCommit: TeamRuleVersionPublishedEvent[] = [];
+    const updated = await db.transaction(async (tx) => {
+      const [note] = await tx
+        .update(teamRuleNotes)
+        .set(patch)
+        .where(and(eq(teamRuleNotes.id, noteId), eq(teamRuleNotes.companyId, companyId)))
+        .returning();
+      if (!note) throw notFound("Note not found");
+      // Reordering is not a rule change, so only text edits earn a revision —
+      // otherwise a drag-to-reorder would bury the history in empty versions.
+      const textChanged = note.title !== existing.title || note.body !== existing.body;
+      if (textChanged) {
+        const version = await appendVersion(tx, {
+          companyId,
+          noteId,
+          title: note.title,
+          body: note.body,
+          label: typeof req.body?.versionLabel === "string"
+            ? req.body.versionLabel.trim().slice(0, 200) || null
+            : null,
+          actor,
+        });
+        postCommit.push({ companyId, noteId, versionId: version.id });
+      }
+      return note;
+    });
+    for (const event of postCommit) publishTeamRuleVersionPublished(db, event);
     await logActivity(db, {
       companyId,
       actorType: actor.actorType,
@@ -225,22 +259,29 @@ export function teamRulesRoutes(db: Db) {
           ),
         );
       if (!version) throw notFound("Version not found");
-      const [updated] = await db
-        .update(teamRuleNotes)
-        .set({ title: version.title, body: version.body, updatedAt: new Date() })
-        .where(and(eq(teamRuleNotes.id, noteId), eq(teamRuleNotes.companyId, companyId)))
-        .returning();
       const actor = getActorInfo(req);
-      // A restore is itself an edit: it lands as a new revision on top rather
-      // than rewinding the history, so the rollback stays auditable.
-      await appendVersion({
-        companyId,
-        noteId,
-        title: updated.title,
-        body: updated.body,
-        label: `Restored from v${revisionNumber}`,
-        actor,
+      const postCommit: TeamRuleVersionPublishedEvent[] = [];
+      const updated = await db.transaction(async (tx) => {
+        const [note] = await tx
+          .update(teamRuleNotes)
+          .set({ title: version.title, body: version.body, updatedAt: new Date() })
+          .where(and(eq(teamRuleNotes.id, noteId), eq(teamRuleNotes.companyId, companyId)))
+          .returning();
+        if (!note) throw notFound("Note not found");
+        // A restore is itself an edit: it lands as a new revision on top rather
+        // than rewinding the history, so the rollback stays auditable.
+        const appended = await appendVersion(tx, {
+          companyId,
+          noteId,
+          title: note.title,
+          body: note.body,
+          label: `Restored from v${revisionNumber}`,
+          actor,
+        });
+        postCommit.push({ companyId, noteId, versionId: appended.id });
+        return note;
       });
+      for (const event of postCommit) publishTeamRuleVersionPublished(db, event);
       await logActivity(db, {
         companyId,
         actorType: actor.actorType,

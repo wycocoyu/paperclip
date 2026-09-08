@@ -197,4 +197,10 @@ export {
   reconcileSkillFanoutOnStartup,
   skillFanoutFailures,
 } from "./skill-fanout.js";
+export {
+  configureTeamDocFanout,
+  publishTeamRuleVersionPublished,
+  publishTeamWikiVersionPublished,
+  teamDocFanoutFailures,
+} from "./team-doc-fanout.js";
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";

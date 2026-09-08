@@ -58,6 +58,7 @@ import {
   issueService,
   instanceSettingsService,
   configureSkillFanout,
+  configureTeamDocFanout,
   reconcileBuiltInAgentsOnStartup,
   reconcileCodexLocalManagedHomesOnStartup,
   reconcilePersistedRuntimeServicesOnStartup,
@@ -980,6 +981,11 @@ export async function startServer(): Promise<StartedServer> {
   // rather than vanishing, and the sweep itself covers the window between a
   // commit and a fan-out the previous process never got to run.
   configureSkillFanout(config.skillsTeamProjection);
+  // No startup reconciliation for Team Rules/Wiki: OpenViking is a remote store
+  // with no local marker to compare against, so a sweep would have to re-push
+  // every note and page on every boot. The ov-sync hook remains the catch-up
+  // path until MUL-559 step 6 retires it.
+  configureTeamDocFanout(config.teamDocProjection);
   void reconcileSkillFanoutOnStartup(db)
     .then((result) => {
       if (result.queued > 0) {

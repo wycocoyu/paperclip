@@ -13,6 +13,7 @@ import {
 } from "@paperclipai/skill-materializer";
 import type { SkillsTeamProjection } from "../config.js";
 import { logger } from "../middleware/logger.js";
+import { createFanoutQueue } from "./fanout-queue.js";
 
 /**
  * The one fact worth reacting to: a skill has a new current version committed.
@@ -74,10 +75,6 @@ export class SkillFanoutDriftError extends Error {
   }
 }
 
-const MAX_ATTEMPTS = 6;
-const RETRY_BASE_MS = 1_000;
-const RETRY_CEILING_MS = 30_000;
-
 const teamDirSink: SkillFanoutSink = {
   name: "skills-team",
   async deliver(snapshot, projection) {
@@ -119,16 +116,21 @@ const teamDirSink: SkillFanoutSink = {
 const sinks: SkillFanoutSink[] = [teamDirSink];
 
 let projection: SkillsTeamProjection | null = null;
-const pending = new Map<string, SkillVersionPublishedEvent>();
-const attempts = new Map<string, number>();
-const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const failures = new Map<string, {
-  event: SkillVersionPublishedEvent;
-  error: string;
-  at: string;
-  attempts: number;
-}>();
-let draining = false;
+
+const queue = createFanoutQueue<Db, SkillVersionPublishedEvent>({
+  keyOf: (event) => `${event.companyId}/${event.skillId}`,
+  deliver,
+  isDeferrable: (err) => err instanceof SkillsPullLockBusyError,
+  onDeferred: (event, key) => {
+    logger.info({ key, ...event }, "skill fan-out deferred: skills pull lock is busy");
+  },
+  onRetry: (event, key, err, attempt) => {
+    logger.warn({ err, key, attempt, ...event }, "skill fan-out failed; retrying");
+  },
+  onGaveUp: (event, key, err, attempts) => {
+    logger.error({ err, key, attempts, ...event }, "skill fan-out gave up after retries");
+  },
+});
 
 export function configureSkillFanout(next: SkillsTeamProjection | null): void {
   projection = next;
@@ -139,12 +141,7 @@ export function configureSkillFanout(next: SkillsTeamProjection | null): void {
  * coordinator owns process-wide state, tests own its lifetime.
  */
 export function resetSkillFanoutForTests(): void {
-  for (const timer of retryTimers.values()) clearTimeout(timer);
-  retryTimers.clear();
-  pending.clear();
-  attempts.clear();
-  failures.clear();
-  draining = false;
+  queue.reset();
   projection = null;
 }
 
@@ -162,7 +159,8 @@ export interface SkillFanoutFailure {
  * Filtered to one company when the failures route asks for it.
  */
 export function skillFanoutFailures(companyId?: string): SkillFanoutFailure[] {
-  return [...failures.values()]
+  return queue
+    .failures()
     .filter((entry) => !companyId || entry.event.companyId === companyId)
     .map((entry) => ({
       companyId: entry.event.companyId,
@@ -173,10 +171,6 @@ export function skillFanoutFailures(companyId?: string): SkillFanoutFailure[] {
     }));
 }
 
-function taskKey(event: SkillVersionPublishedEvent): string {
-  return `${event.companyId}/${event.skillId}`;
-}
-
 /**
  * Hand a committed version to the coordinator. Never throws and never awaits:
  * callers are on a request path that has already committed, so a fan-out
@@ -184,68 +178,7 @@ function taskKey(event: SkillVersionPublishedEvent): string {
  */
 export function publishSkillVersionPublished(db: Db, event: SkillVersionPublishedEvent): void {
   if (!projection || projection.companyId !== event.companyId) return;
-  const key = taskKey(event);
-  const timer = retryTimers.get(key);
-  if (timer) {
-    clearTimeout(timer);
-    retryTimers.delete(key);
-  }
-  // Newest wins: a skill published three times in a row is projected once.
-  pending.set(key, event);
-  attempts.delete(key);
-  void drain(db);
-}
-
-async function drain(db: Db): Promise<void> {
-  if (draining) return;
-  draining = true;
-  try {
-    for (;;) {
-      const next = pending.entries().next();
-      if (next.done) return;
-      const [key, event] = next.value;
-      pending.delete(key);
-      try {
-        await deliver(db, event);
-        attempts.delete(key);
-        failures.delete(key);
-      } catch (err) {
-        recordFailure(db, key, event, err);
-      }
-    }
-  } finally {
-    draining = false;
-  }
-}
-
-function recordFailure(db: Db, key: string, event: SkillVersionPublishedEvent, err: unknown): void {
-  // Lock contention is a peer doing the same idempotent work, not a failed
-  // attempt: it waits out the backoff without spending the retry budget, so a
-  // long CLI pull next to a busy server cannot exhaust it.
-  const lockBusy = err instanceof SkillsPullLockBusyError;
-  const attempt = lockBusy ? (attempts.get(key) ?? 0) : (attempts.get(key) ?? 0) + 1;
-  if (!lockBusy) attempts.set(key, attempt);
-  const error = err instanceof Error ? err.message : String(err);
-  if (!lockBusy && attempt >= MAX_ATTEMPTS) {
-    attempts.delete(key);
-    failures.set(key, { event, error, at: new Date().toISOString(), attempts: attempt });
-    logger.error({ err, key, attempts: attempt, ...event }, "skill fan-out gave up after retries");
-    return;
-  }
-  if (lockBusy) {
-    logger.info({ key, ...event }, "skill fan-out deferred: skills pull lock is busy");
-  } else {
-    logger.warn({ err, key, attempt, ...event }, "skill fan-out failed; retrying");
-  }
-  const delayMs = Math.min(RETRY_BASE_MS * 2 ** (Math.max(attempt, 1) - 1), RETRY_CEILING_MS);
-  const timer = setTimeout(() => {
-    retryTimers.delete(key);
-    // A publish that arrived during the backoff already supersedes this event.
-    if (!pending.has(key)) pending.set(key, event);
-    void drain(db);
-  }, delayMs);
-  timer.unref?.();
-  retryTimers.set(key, timer);
+  queue.publish(db, event);
 }
 
 async function deliver(db: Db, event: SkillVersionPublishedEvent): Promise<void> {
