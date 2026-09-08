@@ -43,11 +43,18 @@ export interface TeamRulesSnapshot {
   notes: readonly { title: string; body: string }[];
 }
 
-export interface TeamWikiPageSnapshot {
+/**
+ * Where one page's projection lives, with no bytes attached — enough to address
+ * a file a sink already wrote, which is what retiring an old copy needs.
+ */
+export interface TeamWikiPageRef {
   companyId: string;
   pageId: string;
   space: string;
   path: string;
+}
+
+export interface TeamWikiPageSnapshot extends TeamWikiPageRef {
   title: string;
   body: string;
 }
@@ -58,6 +65,13 @@ export interface TeamDocFanoutSink {
   /** Returns a short status for the log; throws to request a retry. */
   deliverRules(snapshot: TeamRulesSnapshot, projection: TeamDocProjection): Promise<string>;
   deliverWikiPage(snapshot: TeamWikiPageSnapshot, projection: TeamDocProjection): Promise<string>;
+  /**
+   * Take back what an earlier `deliverWikiPage` put there, because the page was
+   * renamed, archived or deleted. Idempotent — a copy that is already gone is a
+   * success — and throws for anything else, so a failed removal sends the task
+   * back through the retry instead of advancing the watermark past it.
+   */
+  retireWikiPage(previous: TeamWikiPageRef, projection: TeamDocProjection): Promise<string>;
 }
 
 const sinks: TeamDocFanoutSink[] = [openVikingSink];
@@ -147,14 +161,19 @@ async function deliver(db: Db, event: TeamDocEvent): Promise<void> {
       const status = await sink.deliverRules(snapshot, active);
       logger.debug({ sink: sink.name, status, ...event }, "team doc fan-out delivered");
     }
-    await recordDelivered(db, event.companyId, scopeOf(event), fingerprintRules(snapshot));
+    await recordDelivered(db, event.companyId, scopeOf(event), fingerprintRules(snapshot), null);
     return;
   }
+  // What the last successful push addressed. The page row cannot say: on a
+  // rename it already holds the new path, and on a delete it is gone.
+  const previous = await loadDeliveredWikiRef(db, event.companyId, event.pageId);
   const snapshot = await loadWikiSnapshot(db, event);
-  // A page deleted or archived between commit and delivery has nothing left to
-  // project; retiring its OpenViking file is not this path's job. Its watermark
-  // goes, so an unarchive with unchanged bytes still re-delivers.
+  // Archived or deleted. The copy has to go rather than sit there: OpenViking
+  // recall has no exclude filter, so a retired page left in the store keeps
+  // answering queries, and a recalled wrong answer is worse than none —
+  // nothing in it tells the reader to keep looking.
   if (!snapshot) {
+    if (previous) await retire(previous, active);
     await clearDelivered(db, event.companyId, scopeOf(event));
     return;
   }
@@ -162,7 +181,20 @@ async function deliver(db: Db, event: TeamDocEvent): Promise<void> {
     const status = await sink.deliverWikiPage(snapshot, active);
     logger.debug({ sink: sink.name, status, ...event }, "team doc fan-out delivered");
   }
-  await recordDelivered(db, event.companyId, scopeOf(event), fingerprintWikiPage(snapshot));
+  // Renamed: the new copy is written first, so a crash in between leaves a
+  // duplicate the next run removes rather than a live page with no file.
+  if (previous && (previous.space !== snapshot.space || previous.path !== snapshot.path)) {
+    await retire(previous, active);
+  }
+  await recordDelivered(db, event.companyId, scopeOf(event), fingerprintWikiPage(snapshot), snapshot);
+}
+
+/** Throws on to the queue's retry, which is what keeps the watermark behind. */
+async function retire(previous: TeamWikiPageRef, active: TeamDocProjection): Promise<void> {
+  for (const sink of sinks) {
+    const status = await sink.retireWikiPage(previous, active);
+    logger.debug({ sink: sink.name, status, ...previous }, "team doc fan-out retired");
+  }
 }
 
 /**
@@ -170,15 +202,41 @@ async function deliver(db: Db, event: TeamDocEvent): Promise<void> {
  * delivery that did not happen — a sink that throws sends the whole task back
  * through the queue's retry with the watermark still on the previous value.
  */
-async function recordDelivered(db: Db, companyId: string, scope: string, contentHash: string): Promise<void> {
+async function recordDelivered(
+  db: Db,
+  companyId: string,
+  scope: string,
+  contentHash: string,
+  locator: TeamWikiPageRef | null,
+): Promise<void> {
   const deliveredAt = new Date();
+  const deliveredSpace = locator?.space ?? null;
+  const deliveredPath = locator?.path ?? null;
   await db
     .insert(teamDocFanoutWatermarks)
-    .values({ companyId, scope, contentHash, deliveredAt })
+    .values({ companyId, scope, contentHash, deliveredSpace, deliveredPath, deliveredAt })
     .onConflictDoUpdate({
       target: [teamDocFanoutWatermarks.companyId, teamDocFanoutWatermarks.scope],
-      set: { contentHash, deliveredAt },
+      set: { contentHash, deliveredSpace, deliveredPath, deliveredAt },
     });
+}
+
+/**
+ * Where the last successful push for this page landed, or null when there has
+ * been none — including a watermark written before the locator columns existed,
+ * whose file the next delivery re-addresses and records.
+ */
+async function loadDeliveredWikiRef(db: Db, companyId: string, pageId: string): Promise<TeamWikiPageRef | null> {
+  const row = await db
+    .select({ space: teamDocFanoutWatermarks.deliveredSpace, path: teamDocFanoutWatermarks.deliveredPath })
+    .from(teamDocFanoutWatermarks)
+    .where(and(
+      eq(teamDocFanoutWatermarks.companyId, companyId),
+      eq(teamDocFanoutWatermarks.scope, `wiki/${pageId}`),
+    ))
+    .then((rows) => rows[0] ?? null);
+  if (!row?.space || !row.path) return null;
+  return { companyId, pageId, space: row.space, path: row.path };
 }
 
 async function clearDelivered(db: Db, companyId: string, scope: string): Promise<void> {
@@ -264,9 +322,10 @@ async function loadWikiSnapshot(
  * this ships has no watermarks yet and therefore pushes everything once.
  *
  * What it cannot see is drift on OpenViking's own side: the watermark records
- * what we sent, not what the store still holds. Reading every URI back would
- * cost one `ov read` per file on every boot, and a file edited inside
- * OpenViking is MUL-566's territory, not a lost delivery.
+ * what we sent, not what the store still holds, so a file edited inside
+ * OpenViking looks up to date here. Reading every URI back would cost one
+ * `ov read` per file on every boot, which is not worth it for a store nobody
+ * edits by hand.
  */
 export async function reconcileTeamDocFanoutOnStartup(
   db: Db,
@@ -326,6 +385,19 @@ export async function reconcileTeamDocFanoutOnStartup(
     }
     queue.publish(db, { kind: "wiki", companyId: active.companyId, pageId: page.id });
     queued += 1;
+  }
+
+  // A page archived or deleted while this process was down fires no event, and
+  // the loop above only walks live pages — so its watermark is the only thing
+  // left that remembers OpenViking still holds a file for it. Queueing the
+  // scope runs the same delivery an archive would have: no snapshot, retire,
+  // drop the watermark.
+  const live = new Set(pages.map((page) => `wiki/${page.id}`));
+  for (const scope of marks.keys()) {
+    if (!scope.startsWith("wiki/") || live.has(scope)) continue;
+    scanned += 1;
+    queued += 1;
+    queue.publish(db, { kind: "wiki", companyId: active.companyId, pageId: scope.slice("wiki/".length) });
   }
 
   return { scanned, queued, upToDate };

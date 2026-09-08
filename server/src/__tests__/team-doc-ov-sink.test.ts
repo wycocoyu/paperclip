@@ -74,6 +74,17 @@ describe("team doc OpenViking rendering", () => {
     expect(status).toBe("skipped-space=personal");
   });
 
+  it("never removes from the personal space either", async () => {
+    // The skip has to hold in both directions: a personal page was never
+    // pushed, so a retirement that ran would be an `ov rm` against a URI this
+    // sink does not own.
+    const status = await openVikingSink.retireWikiPage(
+      { companyId: "c", pageId: "p", space: "personal", path: "claude/CLAUDE.md" },
+      { ovBin: "/nonexistent/ov", companyId: "c" },
+    );
+    expect(status).toBe("skipped-space=personal");
+  });
+
   it("addresses the two rules documents by their fixed URIs", () => {
     expect(RULES_RESIDENT_URI).toBe("viking://resources/team/rules/resident/resident.md");
     expect(RULES_ACTION_URI).toBe("viking://resources/team/rules/action/action.md");

@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { TeamDocProjection } from "../config.js";
-import type { TeamDocFanoutSink, TeamRulesSnapshot, TeamWikiPageSnapshot } from "./team-doc-fanout.js";
+import type {
+  TeamDocFanoutSink,
+  TeamRulesSnapshot,
+  TeamWikiPageRef,
+  TeamWikiPageSnapshot,
+} from "./team-doc-fanout.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,12 +64,12 @@ export function renderRulesDocuments(snapshot: TeamRulesSnapshot): { resident: s
   };
 }
 
-export function wikiPageUri(snapshot: TeamWikiPageSnapshot): string {
+export function wikiPageUri(page: TeamWikiPageRef): string {
   // Python's \w (unicode) minus the separators the URI keeps; everything else
   // becomes "_" so a title-derived path cannot smuggle a path segment.
-  let safe = (snapshot.path || snapshot.pageId).replace(/[^\p{L}\p{N}_\-./]/gu, "_").replace(/^\/+|\/+$/g, "");
+  let safe = (page.path || page.pageId).replace(/[^\p{L}\p{N}_\-./]/gu, "_").replace(/^\/+|\/+$/g, "");
   if (!safe.endsWith(".md")) safe += ".md";
-  return `viking://resources/team/wiki/${snapshot.space}/${safe}`;
+  return `viking://resources/team/wiki/${page.space}/${safe}`;
 }
 
 export function renderWikiPage(snapshot: TeamWikiPageSnapshot): string {
@@ -111,6 +116,19 @@ async function ovWrite(bin: string, uri: string, text: string): Promise<string> 
   }
 }
 
+/**
+ * `ov rm` exits 0 for a URI OpenViking never had, reporting
+ * `estimated_deleted_count: 0` — so the count, not the exit code, is what
+ * separates "we removed it" from "there was nothing there", and neither is
+ * swallowed: a non-zero exit throws, because a removal that did not happen
+ * must not let the watermark move past the file it left behind.
+ */
+async function ovRemove(bin: string, uri: string): Promise<string> {
+  const removed = await runOv(bin, ["rm", uri, "-o", "json"]);
+  if (removed.code !== 0) throw new Error(`ov rm ${uri} failed: ${summarize(removed.output)}`);
+  return /"estimated_deleted_count"\s*:\s*0\b/.test(removed.output) ? "absent" : "removed";
+}
+
 function summarize(output: string): string {
   return output.trim().replace(/\n/g, " ").slice(0, 200);
 }
@@ -128,5 +146,15 @@ export const openVikingSink: TeamDocFanoutSink = {
   async deliverWikiPage(snapshot, projection) {
     if (OV_SKIPPED_WIKI_SPACES.has(snapshot.space)) return `skipped-space=${snapshot.space}`;
     return await ovWrite(projection.ovBin, wikiPageUri(snapshot), renderWikiPage(snapshot));
+  },
+  /**
+   * `ov mv` exists and would move the file in one call, but a rename also
+   * rewrites the `> source:` line in the body, so it is never one call anyway —
+   * and it fails NOT_FOUND on a source that is already gone, where `ov rm` is
+   * idempotent. Write-then-remove reuses the push above and self-heals.
+   */
+  async retireWikiPage(previous, projection) {
+    if (OV_SKIPPED_WIKI_SPACES.has(previous.space)) return `skipped-space=${previous.space}`;
+    return await ovRemove(projection.ovBin, wikiPageUri(previous));
   },
 };

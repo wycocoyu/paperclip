@@ -72,6 +72,9 @@ describeEmbeddedPostgres("team rules/wiki version atomicity", () => {
       delivered.wiki.push(snapshot);
       return "ok";
     },
+    async retireWikiPage() {
+      return "removed";
+    },
   };
 
   beforeEach(async () => {

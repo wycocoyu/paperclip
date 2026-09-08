@@ -21,9 +21,12 @@ import { companies } from "./companies.js";
  * reordering notes changes the delivered bytes while every surviving note keeps
  * its own version id.
  *
- * A row survives the page it names being deleted. Nothing reads a scope whose
- * page is gone, and retiring the OpenViking file left behind is MUL-566's job,
- * not this table's.
+ * `deliveredSpace` / `deliveredPath` are where that push addressed the file, so
+ * a later rename or archive can take the old one back off OpenViking (MUL-566).
+ * The page row cannot answer that — it holds the new path — and neither can the
+ * version history: the fan-out queue coalesces a burst of saves into one
+ * delivery, so a page renamed a → b → c leaves `a` behind while history points
+ * at `b`. Null for the rules pair, whose two URIs are fixed constants.
  */
 export const teamDocFanoutWatermarks = pgTable(
   "team_doc_fanout_watermarks",
@@ -31,6 +34,8 @@ export const teamDocFanoutWatermarks = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     scope: text("scope").notNull(),
     contentHash: text("content_hash").notNull(),
+    deliveredSpace: text("delivered_space"),
+    deliveredPath: text("delivered_path"),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({

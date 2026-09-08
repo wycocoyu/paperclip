@@ -398,6 +398,10 @@ export function teamWikiRoutes(db: Db) {
       .where(and(eq(teamWikiPages.id, pageId), eq(teamWikiPages.companyId, companyId)))
       .returning();
     if (!updated) throw notFound("Page not found");
+    // Archiving hides the page here but not downstream: without this the
+    // OpenViking copy keeps answering recalls for a page the team retired
+    // (MUL-566). Unarchiving publishes for the same reason, in reverse.
+    publishTeamWikiVersionPublished(db, { companyId, pageId });
     await logActivity(db, {
       companyId,
       actorType: actor.actorType,
@@ -431,6 +435,7 @@ export function teamWikiRoutes(db: Db) {
       .where(and(eq(teamWikiPages.id, pageId), eq(teamWikiPages.companyId, companyId)))
       .returning();
     if (!deleted) throw notFound("Page not found");
+    publishTeamWikiVersionPublished(db, { companyId, pageId });
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId,

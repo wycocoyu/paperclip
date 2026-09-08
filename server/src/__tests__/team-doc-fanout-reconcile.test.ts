@@ -19,6 +19,7 @@ import {
   setTeamDocFanoutSinksForTests,
   type TeamDocFanoutSink,
   type TeamRulesSnapshot,
+  type TeamWikiPageRef,
   type TeamWikiPageSnapshot,
 } from "../services/team-doc-fanout.js";
 import { openVikingSink } from "../services/team-doc-ov-sink.js";
@@ -43,7 +44,9 @@ describeEmbeddedPostgres("team doc fan-out startup reconciliation", () => {
   let boardActor: BoardActor;
 
   const delivered: { rules: TeamRulesSnapshot[]; wiki: TeamWikiPageSnapshot[] } = { rules: [], wiki: [] };
+  const retired: TeamWikiPageRef[] = [];
   let sinkIsDown = false;
+  let retireIsDown = false;
 
   const recorder: TeamDocFanoutSink = {
     name: "recorder",
@@ -57,6 +60,11 @@ describeEmbeddedPostgres("team doc fan-out startup reconciliation", () => {
       delivered.wiki.push(snapshot);
       return "ok";
     },
+    async retireWikiPage(previous) {
+      if (retireIsDown) throw new Error("ov rm is down");
+      retired.push(previous);
+      return "removed";
+    },
   };
 
   beforeEach(async () => {
@@ -65,7 +73,9 @@ describeEmbeddedPostgres("team doc fan-out startup reconciliation", () => {
     boardActor = seeded.actor;
     delivered.rules = [];
     delivered.wiki = [];
+    retired.length = 0;
     sinkIsDown = false;
+    retireIsDown = false;
     resetTeamDocFanoutForTests();
     setTeamDocFanoutSinksForTests([recorder]);
     configureTeamDocFanout({ ovBin: "/nonexistent/ov", companyId });
@@ -97,6 +107,17 @@ describeEmbeddedPostgres("team doc fan-out startup reconciliation", () => {
       .from(teamDocFanoutWatermarks)
       .where(eq(teamDocFanoutWatermarks.companyId, companyId));
     return new Map(rows.map((row) => [row.scope, row.contentHash]));
+  }
+
+  async function deliveredPath(pageId: string): Promise<string | null> {
+    const rows = await ctx.db
+      .select({ path: teamDocFanoutWatermarks.deliveredPath })
+      .from(teamDocFanoutWatermarks)
+      .where(and(
+        eq(teamDocFanoutWatermarks.companyId, companyId),
+        eq(teamDocFanoutWatermarks.scope, `wiki/${pageId}`),
+      ));
+    return rows[0]?.path ?? null;
   }
 
   async function seedNote(): Promise<{ id: string }> {
@@ -171,7 +192,7 @@ describeEmbeddedPostgres("team doc fan-out startup reconciliation", () => {
     expect(await reconcileTeamDocFanoutOnStartup(ctx.db)).toEqual({ scanned: 3, queued: 0, upToDate: 3 });
   });
 
-  it("drops the watermark for a page that is gone by delivery time", async () => {
+  it("retires the delivered copy and drops the watermark for a page that is gone", async () => {
     const page = await seedPage();
     await waitFor(() => delivered.wiki.length > 0, "first delivery");
     await settle();
@@ -179,10 +200,90 @@ describeEmbeddedPostgres("team doc fan-out startup reconciliation", () => {
 
     await ctx.db.delete(teamWikiPages).where(eq(teamWikiPages.id, page.id));
     publishTeamWikiVersionPublished(ctx.db, { companyId, pageId: page.id });
+    await waitFor(() => retired.length > 0, "retirement of the deleted page");
     await settle();
 
+    expect(retired.map((ref) => ref.path)).toEqual(["guide/one"]);
     // Kept, the page would stay "up to date" forever if it ever came back with
     // its original bytes.
+    expect((await watermarks()).has(`wiki/${page.id}`)).toBe(false);
+  });
+
+  it("removes the old copy after the renamed one is in place (MUL-566)", async () => {
+    const page = await seedPage("guide/old");
+    await waitFor(() => delivered.wiki.length > 0, "first delivery");
+    await settle();
+    expect(await deliveredPath(page.id)).toBe("guide/old");
+
+    const res = await request(wikiApp())
+      .patch(`/api/companies/${companyId}/team-wiki/agent/pages/${page.id}`)
+      .send({ path: "guide/new" });
+    expect(res.status).toBe(200);
+    await waitFor(() => retired.length > 0, "retirement of the old path");
+    await settle();
+
+    // Order is the point: the new copy exists before the old one is taken away,
+    // so a crash in between leaves a duplicate rather than nothing at all.
+    expect(delivered.wiki.map((snapshot) => snapshot.path)).toEqual(["guide/old", "guide/new"]);
+    expect(retired.map((ref) => ref.path)).toEqual(["guide/old"]);
+    expect(await deliveredPath(page.id)).toBe("guide/new");
+  });
+
+  it("retires an archived page and re-delivers it on unarchive", async () => {
+    const page = await seedPage("guide/retired");
+    await waitFor(() => delivered.wiki.length > 0, "first delivery");
+    await settle();
+
+    expect((await request(wikiApp())
+      .post(`/api/companies/${companyId}/team-wiki/agent/pages/${page.id}/archive`)).status).toBe(200);
+    await waitFor(() => retired.length > 0, "retirement of the archived page");
+    await settle();
+    expect(retired.map((ref) => ref.path)).toEqual(["guide/retired"]);
+    expect((await watermarks()).has(`wiki/${page.id}`)).toBe(false);
+
+    expect((await request(wikiApp())
+      .post(`/api/companies/${companyId}/team-wiki/agent/pages/${page.id}/unarchive`)).status).toBe(200);
+    await waitFor(() => delivered.wiki.length > 1, "re-delivery after unarchive");
+    await settle();
+    expect(await deliveredPath(page.id)).toBe("guide/retired");
+  });
+
+  it("leaves the watermark in place while the removal is failing", async () => {
+    const page = await seedPage("guide/stuck");
+    await waitFor(() => delivered.wiki.length > 0, "first delivery");
+    await settle();
+
+    retireIsDown = true;
+    expect((await request(wikiApp())
+      .post(`/api/companies/${companyId}/team-wiki/agent/pages/${page.id}/archive`)).status).toBe(200);
+    await settle();
+    // A removal that did not happen must not look like one that did: the
+    // watermark still names the file, which is what the retry reads back.
+    expect(retired).toHaveLength(0);
+    expect(await deliveredPath(page.id)).toBe("guide/stuck");
+
+    retireIsDown = false;
+    await waitFor(() => retired.length > 0, "retry after the removal recovers");
+    await settle();
+    expect((await watermarks()).has(`wiki/${page.id}`)).toBe(false);
+  });
+
+  it("retires a page archived while the process was down", async () => {
+    const page = await seedPage("guide/offline");
+    await waitFor(() => delivered.wiki.length > 0, "first delivery");
+    await settle();
+
+    // Archived with no event behind it, exactly as a killed process leaves it.
+    await ctx.db
+      .update(teamWikiPages)
+      .set({ archivedAt: new Date(), archivedByUserId: "board" })
+      .where(and(eq(teamWikiPages.id, page.id), eq(teamWikiPages.companyId, companyId)));
+
+    // The live-page sweep cannot see it — only its watermark still can.
+    expect(await reconcileTeamDocFanoutOnStartup(ctx.db)).toEqual({ scanned: 1, queued: 1, upToDate: 0 });
+    await waitFor(() => retired.length > 0, "retirement queued by the sweep");
+    await settle();
+    expect(retired.map((ref) => ref.path)).toEqual(["guide/offline"]);
     expect((await watermarks()).has(`wiki/${page.id}`)).toBe(false);
   });
 });
