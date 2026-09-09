@@ -76,6 +76,7 @@ import { TeamRules } from "./pages/TeamRules";
 import { Hooks } from "./pages/Hooks";
 import { TeamSkills } from "./pages/TeamSkills";
 import { TeamWiki } from "./pages/TeamWiki";
+import { OpenSpec } from "./pages/OpenSpec";
 import { SkillStudio } from "./pages/SkillStudio";
 import { Secrets } from "./pages/Secrets";
 import { CompanyImport } from "./pages/CompanyImport";
@@ -206,6 +207,7 @@ function boardRoutes() {
           segment so a link to either one survives sharing and reload. */}
       <Route path="team-wiki" element={<Navigate to="agent" replace />} />
       <Route path="team-wiki/:space" element={<TeamWiki />} />
+      <Route path="openspec" element={<OpenSpec />} />
       <Route path="settings" element={<LegacySettingsRedirect />} />
       <Route path="settings/*" element={<LegacySettingsRedirect />} />
       <Route path="plugins/:pluginId" element={<PluginPage />} />

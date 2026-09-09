@@ -6,6 +6,7 @@ const BOARD_ROUTE_ROOTS = new Set([
   "team-rules",
   "team-wiki",
   "team-skills",
+  "openspec",
   "hooks",
   "personal-assets",
   "teams-catalog",

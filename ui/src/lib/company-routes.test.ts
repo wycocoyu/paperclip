@@ -42,6 +42,14 @@ describe("company routes", () => {
     expect(applyCompanyPrefix("/org", "NEU")).toBe("/NEU/org");
   });
 
+  // 板块路由的根段必须登记在 BOARD_ROUTE_ROOTS 里，否则第一段会被当成公司前缀，
+  // 侧栏链接原样发出去，落在「No company matches prefix」那张错误页上。
+  it("prefixes every board route root, openspec included", () => {
+    expect(applyCompanyPrefix("/openspec", "MUL")).toBe("/MUL/openspec");
+    expect(applyCompanyPrefix("/team-wiki", "MUL")).toBe("/MUL/team-wiki");
+    expect(applyCompanyPrefix("/MUL/openspec", "MUL")).toBe("/MUL/openspec");
+  });
+
   it("does not double-apply the company prefix", () => {
     expect(applyCompanyPrefix("/NEU/company/export", "NEU")).toBe("/NEU/company/export");
   });
