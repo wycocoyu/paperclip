@@ -27,6 +27,7 @@ import {
   LayoutGrid,
   Globe,
   BookOpen,
+  FileText,
   Scale,
   Webhook,
   UserRoundPen,
@@ -291,6 +292,7 @@ export function Sidebar() {
         <SidebarSection label="TeamWorkSpace" collapsible={{ open: teamWorkspaceOpen, onOpenChange: setTeamWorkspaceOpen }}>
           <SidebarNavItem to="/team-rules" label={t("Team Rules")} icon={Scale} />
           <SidebarNavItem to="/team-wiki" label={t("Team Wiki")} icon={BookOpen} />
+          <SidebarNavItem to="/openspec" label="OpenSpec" icon={FileText} />
           <SidebarNavItem to="/team-skills" label="Team Skills" icon={Boxes} />
           <SidebarNavItem to="/hooks" label={t("Hooks")} icon={Webhook} />
         </SidebarSection>
