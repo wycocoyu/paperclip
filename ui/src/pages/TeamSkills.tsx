@@ -72,7 +72,20 @@ export function TeamSkills() {
           </button>
         ))}
       </div>
-      {view === "usage" && selectedCompanyId ? <SkillsUsagePanel companyId={selectedCompanyId} /> : null}
+      {view === "usage" && selectedCompanyId ? (
+        // The library this page already loaded is what tells the usage table
+        // which of its rows we own the description of; `undefined` until it
+        // lands keeps the panel's filter from claiming an empty library.
+        // Narrowed by the same `groupOf` that labels the tab below, so the two
+        // surfaces cannot disagree on what counts as ours: the bundled
+        // `paperclipai/*` entries are in the library but read-only, and a row
+        // whose description cannot be trimmed is noise in a table read to
+        // decide what to trim.
+        <SkillsUsagePanel
+          companyId={selectedCompanyId}
+          teamSkills={skillsQuery.data?.filter((skill) => groupOf(skill.key) === "team")}
+        />
+      ) : null}
       {view === "status" && selectedCompanyId ? <SkillsStatusPanel companyId={selectedCompanyId} /> : null}
       {view !== "library" ? null : (
         <>
