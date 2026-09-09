@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { FileTree, buildFileTree, collectAllPaths } from "@/components/FileTree";
+import { CopyText } from "@/components/CopyText";
 import { PageTabBar } from "@/components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
 import {
@@ -496,7 +497,22 @@ export function TeamWiki({ fixedSpace }: { fixedSpace?: Space } = {}) {
       <>
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="truncate font-mono text-(length:--text-micro) text-muted-foreground">{page.path}</p>
+            <p className="flex items-center gap-2 font-mono text-(length:--text-micro) text-muted-foreground">
+              <span className="truncate">{page.path}</span>
+              {/* A path moves when a page is renamed, so anything that has to
+                  point at this page later (a card, a script, the CLI's
+                  <pathOrId> argument) should carry the id instead. Shown
+                  short, copied in full. */}
+              <CopyText
+                text={page.id}
+                className="shrink-0 font-mono opacity-70"
+                ariaLabel="复制页面 ID"
+                title={`页面 ID ${page.id}（点击复制完整 ID）`}
+                copiedLabel="已复制完整 ID"
+              >
+                {page.id.slice(0, 8)}
+              </CopyText>
+            </p>
             <h3 className="text-sm font-semibold">{page.title}</h3>
           </div>
           <div className="flex shrink-0 gap-1">
