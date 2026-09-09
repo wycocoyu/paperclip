@@ -73,8 +73,13 @@ export function wikiPageUri(page: TeamWikiPageRef): string {
 }
 
 export function renderWikiPage(snapshot: TeamWikiPageSnapshot): string {
+  // The id rides along with the path because the path is the part that moves:
+  // renaming a page changes it, and an agent that recalled this copy has to be
+  // able to name the page it read. Everything downstream (the CLI's <pathOrId>
+  // argument, a card citing a page) takes the id.
   return `# ${snapshot.title}\n\n`
-    + `> source: paperclip team-wiki / ${snapshot.space} / ${snapshot.path}\n\n`
+    + `> source: paperclip team-wiki / ${snapshot.space} / ${snapshot.path}\n`
+    + `> id: ${snapshot.pageId}\n\n`
     + `${snapshot.body ?? ""}`;
 }
 

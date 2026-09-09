@@ -265,8 +265,15 @@ function fingerprintRules(snapshot: TeamRulesSnapshot): string {
   return fingerprint(snapshot.notes.flatMap((note) => [note.title, note.body ?? ""]));
 }
 
+/**
+ * Bump when the rendered file's shape changes, not its content: the fingerprint
+ * is what decides whether a page is re-delivered, so a page nobody edits would
+ * otherwise keep the old rendering forever. v2 added the `> id:` line.
+ */
+const WIKI_RENDER_VERSION = "v2";
+
 function fingerprintWikiPage(snapshot: TeamWikiPageSnapshot): string {
-  return fingerprint([snapshot.space, snapshot.path, snapshot.title, snapshot.body ?? ""]);
+  return fingerprint([WIKI_RENDER_VERSION, snapshot.space, snapshot.path, snapshot.title, snapshot.body ?? ""]);
 }
 
 async function loadRulesSnapshot(db: Db, companyId: string): Promise<TeamRulesSnapshot> {

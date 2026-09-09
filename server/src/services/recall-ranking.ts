@@ -1,7 +1,7 @@
 /**
  * Pure ranking logic for the recall channel (MUL-441).
  *
- * Lifted out of `routes/workspace-recall.ts` so it can be tested without a
+ * Lifted out of the retired recall route so it can be tested without a
  * database, and so the three consumers (workspace recall, issue similarity,
  * future similar-card panels) score candidates the same way instead of each
  * growing its own copy.

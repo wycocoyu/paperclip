@@ -57,10 +57,10 @@ describe("team doc OpenViking rendering", () => {
     expect(wikiPageUri({ ...snap, path: "/a/b.md/" })).toBe("viking://resources/team/wiki/agent/a/b.md");
   });
 
-  it("labels a wiki page with its untouched source path", () => {
+  it("labels a wiki page with its untouched source path and its page id", () => {
     expect(renderWikiPage({
       companyId: "c", pageId: "p", space: "agent", path: "a b/c", title: "Title", body: "Body",
-    })).toBe("# Title\n\n> source: paperclip team-wiki / agent / a b/c\n\nBody");
+    })).toBe("# Title\n\n> source: paperclip team-wiki / agent / a b/c\n> id: p\n\nBody");
   });
 
   it("never pushes the personal space", async () => {
