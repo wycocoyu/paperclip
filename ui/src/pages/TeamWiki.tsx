@@ -335,7 +335,7 @@ function WikiTreeBrowser({
         {activePage ? (
           // The pane spans the rest of the window, but prose past ~1024px is
           // hard to read, so the body keeps its own cap inside it.
-          <div className="w-full max-w-5xl">{renderPage(activePage)}</div>
+          <div className="w-full">{renderPage(activePage)}</div>
         ) : (
           <p className="text-xs text-muted-foreground">从左侧目录选一个页面。</p>
         )}
