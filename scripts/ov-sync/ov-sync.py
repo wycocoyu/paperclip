@@ -9,8 +9,10 @@
             CLAUDE.md / AGENTS.md 的镜像，Claude 自己会加载，OV 再召回等于同一内容两处进上下文）
   Skills  → viking://agent/skills/<slug>/SKILL.md            （OV 正式 skill 类型，决策 3）
   Issues  → viking://resources/team/issues/<MUL-N>/*.md      （只 done 卡，四类文档，不含 decision-log）
+            **不在默认同步里**（2026-09-03）：卡是流水账，未经整理直接进 OV 会挤占召回位、
+            把半成品结论当事实召回。需要时手动 `--only issues` 推，整理过再推。
 
-用法：ov-sync.py [--force] [--only rules,wiki,skills,issues]
+用法：ov-sync.py [--force] [--only rules,wiki,skills]   # issues 要手动加
 """
 import argparse, json, os, re, subprocess, sys, tempfile, urllib.request, urllib.parse
 import yaml
@@ -146,7 +148,12 @@ def sync_wiki(since):
             path = re.sub(r"[^\w\-./一-鿿]", "_", pg.get("path") or pg["id"]).strip("/")
             if not path.endswith(".md"):
                 path += ".md"
-            body = f"# {pg.get('title','')}\n\n> source: paperclip team-wiki / {space} / {pg.get('path')}\n\n{pg.get('body') or ''}"
+            # 与服务端 team-doc-ov-sink.ts 的 renderWikiPage 保持一字一致：
+            # 两边写同一批 URI，格式不同就会互相覆盖掉对方的那一行。
+            body = (f"# {pg.get('title','')}\n\n"
+                    f"> source: paperclip team-wiki / {space} / {pg.get('path')}\n"
+                    f"> id: {pg['id']}\n\n"
+                    f"{pg.get('body') or ''}")
             ok = ov_write(f"viking://resources/team/wiki/{space}/{path}", body)
             n, f = n + ok, f + (not ok)
     return n, f
@@ -200,7 +207,7 @@ def sync_issues(since):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true", help="忽略时间戳全量推")
-    ap.add_argument("--only", default="rules,wiki,skills,issues")
+    ap.add_argument("--only", default="rules,wiki,skills")  # issues 不进默认，见文件头
     a = ap.parse_args()
     # stamp 按类合并，不整体覆盖：--only issues --force 曾把 rules/wiki/skills 的时间戳一起抹掉，
     # 下一次增量又把那 30 个文件全推了一遍
