@@ -5,7 +5,14 @@ export type IssueWorkProductType =
   | "branch"
   | "commit"
   | "artifact"
-  | "document";
+  | "document"
+  /**
+   * A link into the openspec planning store, rendered as its own section on
+   * the issue. The store is a git checkout read straight off disk, so nothing
+   * is copied onto the card — `url` points at the OpenSpec tab's deep link and
+   * `metadata.storePath` keeps the store-relative path it was built from.
+   */
+  | "openspec";
 
 export type IssueWorkProductProvider =
   | "paperclip"

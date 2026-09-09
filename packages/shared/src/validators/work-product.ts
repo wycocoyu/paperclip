@@ -14,6 +14,7 @@ export const issueWorkProductTypeSchema = z.enum([
   "commit",
   "artifact",
   "document",
+  "openspec",
 ]);
 
 export const issueWorkProductStatusSchema = z.enum([
