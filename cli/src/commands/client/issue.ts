@@ -1197,6 +1197,25 @@ const OPENSPEC_WORK_PRODUCT_TYPE = "openspec";
 
 type OpenSpecLinkOptions = BaseClientOptions & { title?: string };
 
+type OpenSpecChangeMatch = { path: string; name: string; archived: boolean; matchedIn: string[] };
+
+/**
+ * store 里提到这张卡的 change。收卡那一刻问一次，把「这卡走过 openspec 但没挂
+ * 回来」捞出来。答案每次现算，不留登记，所以 change 改名或归档后照样找得到。
+ */
+async function fetchChangesForIssue(
+  ctx: ResolvedClientContext,
+  identifier: string,
+): Promise<OpenSpecChangeMatch[]> {
+  const result = await ctx.api.get<{ available: boolean; root: string; changes: OpenSpecChangeMatch[] }>(
+    `${apiPath`/api/companies/${ctx.companyId}/openspec/changes-for-issue`}?identifier=${encodeURIComponent(identifier)}`,
+  );
+  if (!result?.available) {
+    throw new Error(`服务端没找到 openspec 仓（读取路径 ${result?.root ?? "未知"}）。`);
+  }
+  return result.changes ?? [];
+}
+
 /** store 里的全部可读文件，用来判断一条路径是不是真的存在。 */
 async function fetchOpenSpecFiles(ctx: ResolvedClientContext): Promise<string[]> {
   const listing = await ctx.api.get<{ available: boolean; root: string; files: Array<{ path: string }> }>(
@@ -1267,17 +1286,40 @@ function openSpecLinkRows(rows: unknown): Array<{ id: string; title: string; sto
   addCommonClientOptions(
     issue
       .command("openspec:link")
-      .description("Attach an openspec store path (a change directory or one file) to an issue")
+      .description("Attach an openspec change to an issue. Omit the path to find it by card number (close-out check)")
       .argument("<issueId>", "Issue ID or identifier")
-      .argument("<storePath>", "Store-relative path, e.g. openspec/changes/<change> or .../proposal.md")
+      .argument("[storePath]", "Store-relative path; omit to search the store for changes naming this card")
       .option("--title <title>", "Display title (defaults to the change or file name)")
-      .action(async (issueId: string, storePathArg: string, opts: OpenSpecLinkOptions) => {
+      .action(async (issueId: string, storePathArg: string | undefined, opts: OpenSpecLinkOptions) => {
         try {
           const ctx = resolveCommandContext(opts);
           const issue = await ctx.api.get<Issue>(apiPath`/api/issues/${issueId}`);
           if (!issue) throw new Error(`Issue not found: ${issueId}`);
 
-          const storePath = normalizeStorePath(storePathArg);
+          // 收卡用法：不给路径就按卡号去 store 里找。命中唯一才自动挂——多个
+          // 候选时挑哪个是判断，不是查找，挂错了比没挂更难发现。
+          let resolvedPathArg = storePathArg;
+          if (!resolvedPathArg) {
+            const identifier = issue.identifier ?? issueId;
+            const matches = await fetchChangesForIssue(ctx, identifier);
+            if (matches.length === 0) {
+              console.log(`store 里没有提到 ${identifier} 的 change，这张卡没走 openspec，不用挂。`);
+              return;
+            }
+            if (matches.length > 1) {
+              console.log(`store 里有 ${matches.length} 个 change 提到 ${identifier}，挑一个再挂：`);
+              for (const match of matches) {
+                console.log(`  ${match.path}${match.archived ? "  [archived]" : ""}`);
+                console.log(`    命中于 ${match.matchedIn.join("、")}`);
+              }
+              console.log(`\n挂法：paperclipai issue openspec:link ${identifier} <上面的路径>`);
+              return;
+            }
+            resolvedPathArg = matches[0]!.path;
+            console.log(`按卡号找到唯一 change：${resolvedPathArg}`);
+          }
+
+          const storePath = normalizeStorePath(resolvedPathArg);
           const { isDirectory } = assertStorePathExists(storePath, await fetchOpenSpecFiles(ctx));
           const title = opts.title?.trim() || defaultOpenSpecTitle(storePath, isDirectory);
 

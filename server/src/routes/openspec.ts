@@ -103,6 +103,71 @@ export async function listStoreFiles(root: string): Promise<OpenSpecFile[]> {
   return files;
 }
 
+/**
+ * The change a card belongs to, found by reading the store rather than by
+ * anyone registering the pair. A change already names its card — in its
+ * directory name, its proposal, or its tasks — so a second copy of that
+ * relationship in the database would just be one more thing to keep in sync,
+ * and it would go stale the moment a change is archived and renamed.
+ *
+ * Only `changes/` is searched. `specs/` holds the accumulated spec, which
+ * outlives any one card and is not what "which change was this card" means.
+ */
+export type OpenSpecChangeMatch = {
+  /** Store-relative path of the change directory. */
+  path: string;
+  /** Directory name with the archive date prefix stripped. */
+  name: string;
+  archived: boolean;
+  /** Which files inside named the card — evidence for the caller to judge. */
+  matchedIn: string[];
+};
+
+/** `MUL-563` must not match `MUL-5631`, so the digits are bounded on both ends. */
+function issueMentionPattern(identifier: string): RegExp {
+  const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^A-Za-z0-9-])${escaped}([^0-9]|$)`, "i");
+}
+
+export async function findChangesForIssue(
+  root: string,
+  identifier: string,
+  files: OpenSpecFile[],
+): Promise<OpenSpecChangeMatch[]> {
+  const pattern = issueMentionPattern(identifier);
+  // Group the listing by the change directory each file sits in. A change is
+  // the path segment right under `changes/`, or under `changes/archive/`.
+  const byChange = new Map<string, string[]>();
+  for (const file of files) {
+    const m = /^(.*changes\/(?:archive\/)?[^/]+)\//.exec(file.path);
+    if (!m) continue;
+    const dir = m[1]!;
+    const bucket = byChange.get(dir);
+    if (bucket) bucket.push(file.path);
+    else byChange.set(dir, [file.path]);
+  }
+
+  const matches: OpenSpecChangeMatch[] = [];
+  for (const [dir, dirFiles] of byChange) {
+    const matchedIn: string[] = [];
+    // The directory name counts as a mention on its own: an archived change is
+    // renamed to `<date>-<card>-<slug>`, which is often the only place the card
+    // number survives.
+    if (pattern.test(dir.split("/").pop() ?? "")) matchedIn.push("(目录名)");
+    for (const filePath of dirFiles) {
+      const stats = await fs.stat(path.join(root, filePath)).catch(() => null);
+      if (!stats || stats.size > MAX_FILE_BYTES) continue;
+      const content = await fs.readFile(path.join(root, filePath), "utf8").catch(() => null);
+      if (content && pattern.test(content)) matchedIn.push(filePath);
+    }
+    if (matchedIn.length === 0) continue;
+    const name = (dir.split("/").pop() ?? dir).replace(/^\d{4}-\d{2}-\d{2}-/, "");
+    matches.push({ path: dir, name, archived: dir.includes("/archive/"), matchedIn });
+  }
+  matches.sort((a, b) => Number(a.archived) - Number(b.archived) || a.path.localeCompare(b.path));
+  return matches;
+}
+
 export function openspecRoutes() {
   const router = Router();
 
@@ -122,6 +187,28 @@ export function openspecRoutes() {
       root: OPENSPEC_STORE_ROOT,
       available: true,
       files: await listStoreFiles(OPENSPEC_STORE_ROOT),
+    });
+  });
+
+  /**
+   * Which changes mention this card. Read at close-out to catch a card whose
+   * openspec work was never linked back — the answer is derived from the store
+   * every time, so a renamed or archived change still resolves.
+   */
+  router.get("/companies/:companyId/openspec/changes-for-issue", async (req, res) => {
+    assertCompanyAccess(req, req.params.companyId as string);
+    const identifier = typeof req.query.identifier === "string" ? req.query.identifier.trim() : "";
+    if (!identifier) throw badRequest("identifier query parameter is required");
+    const rootStats = await fs.stat(OPENSPEC_STORE_ROOT).catch(() => null);
+    if (!rootStats?.isDirectory()) {
+      res.json({ root: OPENSPEC_STORE_ROOT, available: false, changes: [] });
+      return;
+    }
+    const files = await listStoreFiles(OPENSPEC_STORE_ROOT);
+    res.json({
+      root: OPENSPEC_STORE_ROOT,
+      available: true,
+      changes: await findChangesForIssue(OPENSPEC_STORE_ROOT, identifier, files),
     });
   });
 
