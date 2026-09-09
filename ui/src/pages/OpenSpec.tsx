@@ -84,12 +84,30 @@ function StoreTreeBrowser({ companyId, files, storageKey }: {
   );
   const rail = useResizableRail({ storageKey: "paperclip.openspec.railWidth" });
 
-  // A refetch — or a link pointing at a file that has since been renamed or
-  // archived — can retire the requested path, so fall back to the first file
-  // instead of leaving the reading pane blank.
-  const activePath =
-    selectedPath && filePaths.includes(selectedPath) ? selectedPath : (filePaths[0] ?? null);
-  const requestedButMissing = Boolean(selectedPath) && selectedPath !== activePath;
+  // A link can name a directory rather than a file — an issue that points at a
+  // whole change is the normal case, since a change is a folder. There is no
+  // directory view to open, so resolve it to the file a reader wants first:
+  // `proposal.md` if the change has one, otherwise whatever sorts first inside.
+  const resolvedPath = useMemo(() => {
+    if (!selectedPath) return null;
+    if (filePaths.includes(selectedPath)) return selectedPath;
+    const dirPrefix = `${selectedPath.replace(/\/+$/, "")}/`;
+    const inside = filePaths.filter((path) => path.startsWith(dirPrefix));
+    if (inside.length === 0) return null;
+    return (
+      inside.find((path) => path === `${dirPrefix}proposal.md`)
+      ?? inside.slice().sort()[0]
+    );
+  }, [selectedPath, filePaths]);
+
+  // A refetch — or a link pointing at something since renamed or archived —
+  // can retire the requested path, so fall back to the first file instead of
+  // leaving the reading pane blank.
+  const activePath = resolvedPath ?? (filePaths[0] ?? null);
+  // Only a path that resolves to nothing at all is "missing". A directory that
+  // resolved to a file inside it did what the link asked for, so it gets no
+  // warning.
+  const requestedButMissing = Boolean(selectedPath) && resolvedPath === null;
 
   const fileQuery = useQuery({
     queryKey: ["openspec", "file", companyId, activePath],
