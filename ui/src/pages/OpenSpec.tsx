@@ -5,6 +5,7 @@ import { api } from "@/api/client";
 import { useCompany } from "@/context/CompanyContext";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { FileTree, buildFileTree, collectAllPaths } from "@/components/FileTree";
+import { useResizableRail } from "@/hooks/useResizableRail";
 
 type OpenSpecFile = { path: string; size: number; modifiedAt: string };
 type OpenSpecListing = { root: string; available: boolean; files: OpenSpecFile[] };
@@ -61,6 +62,7 @@ function StoreTreeBrowser({ companyId, files, storageKey }: {
     readExpandedDirs(storageKey, collectAllPaths(nodes, "dir")),
   );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const rail = useResizableRail({ storageKey: "paperclip.openspec.railWidth" });
 
   // A refetch can retire the selected path, so fall back to the first file
   // instead of leaving the reading pane blank.
@@ -86,7 +88,8 @@ function StoreTreeBrowser({ companyId, files, storageKey }: {
   return (
     <div className="flex min-h-0 w-full flex-col sm:flex-row">
       <nav
-        className="shrink-0 overflow-y-auto border-b border-border py-3 sm:w-72 sm:border-b-0 sm:border-r"
+        className="relative shrink-0 overflow-y-auto border-b border-border py-3 sm:w-[var(--rail-w)] sm:border-b-0 sm:border-r"
+        style={rail.railStyle}
         aria-label="目录"
         data-testid="openspec-dir-nav"
       >
@@ -103,6 +106,15 @@ function StoreTreeBrowser({ companyId, files, storageKey }: {
           wrapLabels={false}
           ariaLabel="OpenSpec 目录"
           empty={{ title: "仓里还没有文件" }}
+        />
+        {/* 手柄压在 rail 右缘上，`relative` 由 nav 自己提供。before 伪元素画那条
+            一像素的线，只在悬停、聚焦或拖动时显形，静止时不给页面加视觉噪音。 */}
+        <div
+          {...rail.handleProps}
+          data-testid="openspec-rail-handle"
+          className={`absolute inset-y-0 right-0 z-20 hidden w-3 cursor-col-resize touch-none outline-none sm:block
+            before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-transparent before:transition-colors
+            hover:before:bg-border focus-visible:before:bg-ring ${rail.isResizing ? "before:bg-ring" : ""}`}
         />
       </nav>
       <div className="min-w-0 flex-1 overflow-y-auto px-6 py-5" data-testid="openspec-file-pane">
