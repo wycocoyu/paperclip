@@ -38,8 +38,10 @@ vi.mock("@/context/CompanyContext", () => ({
   }),
 }));
 vi.mock("@/context/ToastContext", () => ({ useToastActions: () => ({ pushToast: vi.fn() }) }));
+// The archive is a route, not a prop, so the space has to be swappable per test.
+const route = vi.hoisted(() => ({ space: "agent" }));
 vi.mock("@/lib/router", () => ({
-  useParams: () => ({ companyPrefix: "MUL", space: "agent" }),
+  useParams: () => ({ companyPrefix: "MUL", space: route.space }),
   useNavigate: () => vi.fn(),
 }));
 vi.mock("@/components/PageTabBar", () => ({ PageTabBar: () => null }));
@@ -74,6 +76,7 @@ describe("TeamWiki tree navigation", () => {
   let root: ReturnType<typeof createRoot>;
 
   beforeEach(() => {
+    route.space = "agent";
     localStorage.clear();
     mockApi.get.mockResolvedValue(PAGES);
     container = document.createElement("div");
@@ -154,5 +157,72 @@ describe("TeamWiki tree navigation", () => {
     for (let i = 0; i < 6; i++) await flushReact();
 
     expect(pane(container)).toContain("body of playbooks/decision-log");
+  });
+});
+
+// 归档也要和另外两个 wiki 一个样：左树右正文，铺满整块主区（老板 2026-09-09）。
+describe("TeamWiki archive", () => {
+  const ARCHIVED = [
+    { ...PAGES[0], id: "arch-0", space: "agent" as const },
+    { ...PAGES[0], id: "arch-1", space: "paperclip" as const },
+    { ...PAGES[2], id: "arch-2", space: "paperclip" as const },
+  ];
+  let container: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+
+  beforeEach(() => {
+    route.space = "archived";
+    localStorage.clear();
+    mockApi.get.mockResolvedValue(ARCHIVED);
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.clearAllMocks();
+  });
+
+  async function render() {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <TeamWiki />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+  }
+
+  it("browses as a tree filed under one folder per space", async () => {
+    await render();
+    expect(treeRows(container).map((r) => r.path)).toEqual([
+      "Agent Wiki",
+      "Agent Wiki/playbooks",
+      "Agent Wiki/playbooks/decision-log",
+      "Paperclip Wiki",
+      "Paperclip Wiki/playbooks",
+      "Paperclip Wiki/playbooks/decision-log",
+      "Paperclip Wiki/terminology",
+      "Paperclip Wiki/terminology/README",
+    ]);
+  });
+
+  it("keeps the same path from both spaces reachable as separate rows", async () => {
+    await render();
+    const row = container.querySelector<HTMLElement>(
+      '[data-file-tree-path="Paperclip Wiki/playbooks/decision-log"]',
+    )!;
+    await act(async () => row.click());
+    await flushReact();
+    expect(pane(container)).toContain("body of playbooks/decision-log");
+  });
+
+  it("drops the centred max-width column so the archive fills the main area", async () => {
+    await render();
+    expect(container.querySelector(".max-w-4xl")).toBeNull();
+    expect(container.querySelector('[data-testid="wiki-page-pane"]')).not.toBeNull();
   });
 });

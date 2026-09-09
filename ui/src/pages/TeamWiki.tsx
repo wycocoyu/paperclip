@@ -108,6 +108,15 @@ const SPACE_META: Record<Space, { label: string; blurb: string }> = {
   },
 };
 
+/**
+ * The archive holds pages from both team spaces, so it files them under a
+ * folder per space. Without that prefix a path archived from both spaces
+ * would collide into one tree row.
+ */
+function archiveTreePath(page: TeamWikiPage) {
+  return `${SPACE_META[page.space]?.label ?? page.space}/${page.path}`;
+}
+
 interface TeamWikiPage {
   id: string;
   companyId: string;
@@ -279,14 +288,29 @@ function WikiTreeBrowser({
   pages,
   storageKey,
   renderPage,
+  pathOf,
 }: {
   pages: TeamWikiPage[];
   storageKey: string;
   renderPage: (page: TeamWikiPage) => ReactNode;
+  /** The archive is cross-space, so it files each row under its space and can
+   *  still hold the same path twice; the tree needs one row per page. */
+  pathOf?: (page: TeamWikiPage) => string;
 }) {
+  // A tree row is addressed by its path, but two pages can share one, so a
+  // repeat gets a numbered suffix rather than silently swallowing the page.
+  const entries = useMemo(() => {
+    const seen = new Map<string, number>();
+    return pages.map((page) => {
+      const base = pathOf ? pathOf(page) : page.path;
+      const nth = (seen.get(base) ?? 0) + 1;
+      seen.set(base, nth);
+      return { key: nth === 1 ? base : `${base} (${nth})`, page };
+    });
+  }, [pages, pathOf]);
   const nodes = useMemo(
-    () => buildFileTree(Object.fromEntries(pages.map((page) => [page.path, true]))),
-    [pages],
+    () => buildFileTree(Object.fromEntries(entries.map((entry) => [entry.key, true]))),
+    [entries],
   );
   const filePaths = useMemo(() => [...collectAllPaths(nodes, "file")], [nodes]);
   const [expandedDirs, setExpandedDirs] = useState(() =>
@@ -298,7 +322,7 @@ function WikiTreeBrowser({
   // back to the first page instead of leaving the reading pane blank.
   const activePath =
     selectedPath && filePaths.includes(selectedPath) ? selectedPath : (filePaths[0] ?? null);
-  const activePage = pages.find((page) => page.path === activePath) ?? null;
+  const activePage = entries.find((entry) => entry.key === activePath)?.page ?? null;
 
   function toggleDir(path: string) {
     const next = new Set(expandedDirs);
@@ -548,16 +572,16 @@ export function TeamWiki({ fixedSpace }: { fixedSpace?: Space } = {}) {
     );
   }
 
-  // The archive is cross-space, so its rows can carry the same path twice and
-  // it stays a flat list; only the two team spaces browse as a tree.
-  const showTree = !fixedSpace && !isArchive;
-  const expandedStorageKey = `${WIKI_EXPANDED_STORAGE_PREFIX}:${selectedCompanyId ?? "global"}:${space}`;
+  // Every team tab browses as a tree, the archive included (user 2026-09-09:
+  // "归档也像其他两个 wiki 一样"). Only the personal files stay a flat list.
+  const showTree = !fixedSpace;
+  const expandedStorageKey = `${WIKI_EXPANDED_STORAGE_PREFIX}:${selectedCompanyId ?? "global"}:${isArchive ? "archived" : space}`;
 
   /**
    * A tree space owns the whole main area: the rail has to reach the app
    * sidebar, so it cancels <main>'s padding the way RoutineDetail does. The
-   * archive and the personal files are flat lists that read fine in the
-   * centred column, so they keep it.
+   * personal files are a flat list that reads fine in the centred column, so
+   * they keep it.
    */
   return (
     <div
@@ -700,10 +724,11 @@ export function TeamWiki({ fixedSpace }: { fixedSpace?: Space } = {}) {
           // app sidebar; min-h-0 lets the rail and the body scroll separately.
           <div className="-mx-6 flex min-h-0 flex-1 border-t border-border">
             <WikiTreeBrowser
-              key={`${selectedCompanyId ?? "none"}:${space}`}
+              key={`${selectedCompanyId ?? "none"}:${isArchive ? "archived" : space}`}
               pages={pages}
               storageKey={expandedStorageKey}
               renderPage={renderPageCard}
+              pathOf={isArchive ? archiveTreePath : undefined}
             />
           </div>
         ) : (
