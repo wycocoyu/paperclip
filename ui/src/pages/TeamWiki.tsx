@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, ArchiveRestore, BookOpen, History, Pencil, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
 import { useNavigate, useParams } from "@/lib/router";
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownBody } from "@/components/MarkdownBody";
+import { FileTree, buildFileTree, collectAllPaths } from "@/components/FileTree";
 import { PageTabBar } from "@/components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
 import {
@@ -242,6 +243,98 @@ function PersonalSyncHelp({ companyId }: { companyId: string | null }) {
   );
 }
 
+/** Expanded directories survive a reload, keyed per company + space. */
+const WIKI_EXPANDED_STORAGE_PREFIX = "paperclip.team-wiki.expanded";
+
+function readExpandedDirs(storageKey: string, fallback: ReadonlySet<string>): Set<string> {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw === null) return new Set(fallback);
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set(fallback);
+    return new Set(parsed.filter((value): value is string => typeof value === "string" && value.length > 0));
+  } catch {
+    return new Set(fallback);
+  }
+}
+
+function writeExpandedDirs(storageKey: string, dirs: ReadonlySet<string>) {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify([...dirs].sort()));
+  } catch {
+    // A blocked or full store only costs the reload-time restore.
+  }
+}
+
+/**
+ * Team spaces browse as a file tree on the left and one page's body on the
+ * right. Directories come from the slashes in a page's path; a directory with
+ * no page under it has no row, because the store holds pages, not folders.
+ *
+ * The caller remounts this per company + space through `key`, so the
+ * localStorage seed is read once per storage key rather than resynced by an
+ * effect.
+ */
+function WikiTreeBrowser({
+  pages,
+  storageKey,
+  renderPage,
+}: {
+  pages: TeamWikiPage[];
+  storageKey: string;
+  renderPage: (page: TeamWikiPage) => ReactNode;
+}) {
+  const nodes = useMemo(
+    () => buildFileTree(Object.fromEntries(pages.map((page) => [page.path, true]))),
+    [pages],
+  );
+  const filePaths = useMemo(() => [...collectAllPaths(nodes, "file")], [nodes]);
+  const [expandedDirs, setExpandedDirs] = useState(() =>
+    readExpandedDirs(storageKey, collectAllPaths(nodes, "dir")),
+  );
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+
+  // A search or an archive can retire the selected path mid-session, so fall
+  // back to the first page instead of leaving the reading pane blank.
+  const activePath =
+    selectedPath && filePaths.includes(selectedPath) ? selectedPath : (filePaths[0] ?? null);
+  const activePage = pages.find((page) => page.path === activePath) ?? null;
+
+  function toggleDir(path: string) {
+    const next = new Set(expandedDirs);
+    if (!next.delete(path)) next.add(path);
+    setExpandedDirs(next);
+    writeExpandedDirs(storageKey, next);
+  }
+
+  return (
+    <div className="flex flex-col gap-6 sm:flex-row">
+      <nav className="sm:w-60 sm:shrink-0" aria-label="目录" data-testid="wiki-dir-nav">
+        <p className="mb-1 px-2 text-(length:--text-micro) font-semibold uppercase tracking-wide text-muted-foreground">
+          目录
+        </p>
+        <FileTree
+          nodes={nodes}
+          selectedFile={activePath}
+          expandedDirs={expandedDirs}
+          onToggleDir={toggleDir}
+          onSelectFile={setSelectedPath}
+          showCheckboxes={false}
+          ariaLabel="Wiki 目录"
+          empty={{ title: "还没有页面" }}
+        />
+      </nav>
+      <div className="min-w-0 flex-1" data-testid="wiki-page-pane">
+        {activePage ? (
+          <div className="rounded-lg border border-border p-4">{renderPage(activePage)}</div>
+        ) : (
+          <p className="text-xs text-muted-foreground">从左侧目录选一个页面。</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function TeamWiki({ fixedSpace }: { fixedSpace?: Space } = {}) {
   const params = useParams();
   const navigate = useNavigate();
@@ -353,6 +446,103 @@ export function TeamWiki({ fixedSpace }: { fixedSpace?: Space } = {}) {
       : dirTab === "__root__"
         ? rootPages
         : visiblePages.filter((p) => p.path.startsWith(dirTab + "/"));
+
+  /**
+   * The tree view shows one page in its right pane while the archive shelf and
+   * the personal tabs still list every page, so the card markup is shared.
+   */
+  function renderPageCard(page: TeamWikiPage) {
+    return editing === page.id ? (
+      <PageEditor
+        page={page}
+        onSave={(title, path, body) => updatePage.mutate({ id: page.id, title, path, body })}
+        onCancel={() => setEditing(null)}
+        pending={updatePage.isPending}
+      />
+    ) : (
+      <>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate font-mono text-(length:--text-micro) text-muted-foreground">{page.path}</p>
+            <h3 className="text-sm font-semibold">{page.title}</h3>
+          </div>
+          <div className="flex shrink-0 gap-1">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="版本历史"
+              title="版本历史"
+              onClick={() => setHistoryFor((current) => (current === page.id ? null : page.id))}
+            >
+              <History className="h-3.5 w-3.5" aria-hidden />
+            </Button>
+            <Button size="icon-xs" variant="ghost" aria-label="编辑" onClick={() => setEditing(page.id)}>
+              <Pencil className="h-3.5 w-3.5" aria-hidden />
+            </Button>
+            {/* 归档 (MUL-455) sits before 删除 on purpose: it is the
+                reversible neighbour of an irreversible button, and a
+                reader scanning left to right should meet it first. */}
+            {isArchive ? (
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="恢复"
+                title="放回原空间"
+                disabled={setArchived.isPending}
+                onClick={() => setArchived.mutate({ page, archived: false })}
+              >
+                <ArchiveRestore className="h-3.5 w-3.5" aria-hidden />
+              </Button>
+            ) : (
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="归档"
+                title="归档（正文与历史保留，可恢复）"
+                disabled={setArchived.isPending}
+                onClick={() => setArchived.mutate({ page, archived: true })}
+              >
+                <Archive className="h-3.5 w-3.5" aria-hidden />
+              </Button>
+            )}
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="删除"
+              onClick={() => {
+                if (window.confirm(`删除页面「${page.title}」？版本历史会一并删除。`)) deletePage.mutate(page.id);
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+            </Button>
+          </div>
+        </div>
+        <div className="mt-1 text-sm text-muted-foreground">
+          <MarkdownBody>{page.body || "_（空）_"}</MarkdownBody>
+        </div>
+        <p className="mt-2 text-(length:--text-micro) text-muted-foreground">
+          更新于 {new Date(page.updatedAt).toLocaleString()}
+          {authorLabel(page.createdByAgentId, agentNames)
+            ? ` · ${authorLabel(page.createdByAgentId, agentNames)} 创建`
+            : ""}
+        </p>
+        {historyFor === page.id ? (
+          <PageVersions
+            companyId={selectedCompanyId}
+            space={space}
+            pageId={page.id}
+            agentNames={agentNames}
+            onRestored={invalidatePages}
+          />
+        ) : null}
+      </>
+    );
+  }
+
+  // The archive is cross-space, so its rows can carry the same path twice and
+  // it stays a flat list; only the two team spaces browse as a tree.
+  const showTree = !fixedSpace && !isArchive;
+  const expandedStorageKey = `${WIKI_EXPANDED_STORAGE_PREFIX}:${selectedCompanyId ?? "global"}:${space}`;
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-6 py-8">
@@ -484,6 +674,14 @@ export function TeamWiki({ fixedSpace }: { fixedSpace?: Space } = {}) {
             ))}
           </div>
         ) : null}
+        {showTree ? (
+          <WikiTreeBrowser
+            key={`${selectedCompanyId ?? "none"}:${space}`}
+            pages={pages}
+            storageKey={expandedStorageKey}
+            renderPage={renderPageCard}
+          />
+        ) : (
         <div className={fixedSpace ? "" : "flex flex-col gap-6 sm:flex-row"}>
         {fixedSpace ? null : (
           <nav className="sm:w-44 sm:shrink-0" aria-label="目录" data-testid="wiki-dir-nav">
@@ -511,95 +709,12 @@ export function TeamWiki({ fixedSpace }: { fixedSpace?: Space } = {}) {
         <ul className={fixedSpace ? "space-y-3" : "min-w-0 flex-1 space-y-3"}>
           {filteredPages.map((page) => (
             <li key={page.id} className="rounded-lg border border-border p-4">
-              {editing === page.id ? (
-                <PageEditor
-                  page={page}
-                  onSave={(title, path, body) => updatePage.mutate({ id: page.id, title, path, body })}
-                  onCancel={() => setEditing(null)}
-                  pending={updatePage.isPending}
-                />
-              ) : (
-                <>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate font-mono text-(length:--text-micro) text-muted-foreground">{page.path}</p>
-                      <h3 className="text-sm font-semibold">{page.title}</h3>
-                    </div>
-                    <div className="flex shrink-0 gap-1">
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        aria-label="版本历史"
-                        title="版本历史"
-                        onClick={() => setHistoryFor((current) => (current === page.id ? null : page.id))}
-                      >
-                        <History className="h-3.5 w-3.5" aria-hidden />
-                      </Button>
-                      <Button size="icon-xs" variant="ghost" aria-label="编辑" onClick={() => setEditing(page.id)}>
-                        <Pencil className="h-3.5 w-3.5" aria-hidden />
-                      </Button>
-                      {/* 归档 (MUL-455) sits before 删除 on purpose: it is the
-                          reversible neighbour of an irreversible button, and a
-                          reader scanning left to right should meet it first. */}
-                      {isArchive ? (
-                        <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          aria-label="恢复"
-                          title="放回原空间"
-                          disabled={setArchived.isPending}
-                          onClick={() => setArchived.mutate({ page, archived: false })}
-                        >
-                          <ArchiveRestore className="h-3.5 w-3.5" aria-hidden />
-                        </Button>
-                      ) : (
-                        <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          aria-label="归档"
-                          title="归档（正文与历史保留，可恢复）"
-                          disabled={setArchived.isPending}
-                          onClick={() => setArchived.mutate({ page, archived: true })}
-                        >
-                          <Archive className="h-3.5 w-3.5" aria-hidden />
-                        </Button>
-                      )}
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        aria-label="删除"
-                        onClick={() => {
-                          if (window.confirm(`删除页面「${page.title}」？版本历史会一并删除。`)) deletePage.mutate(page.id);
-                        }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" aria-hidden />
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="mt-1 text-sm text-muted-foreground">
-                    <MarkdownBody>{page.body || "_（空）_"}</MarkdownBody>
-                  </div>
-                  <p className="mt-2 text-(length:--text-micro) text-muted-foreground">
-                    更新于 {new Date(page.updatedAt).toLocaleString()}
-                    {authorLabel(page.createdByAgentId, agentNames)
-                      ? ` · ${authorLabel(page.createdByAgentId, agentNames)} 创建`
-                      : ""}
-                  </p>
-                  {historyFor === page.id ? (
-                    <PageVersions
-                      companyId={selectedCompanyId}
-                      space={space}
-                      pageId={page.id}
-                      agentNames={agentNames}
-                      onRestored={invalidatePages}
-                    />
-                  ) : null}
-                </>
-              )}
+              {renderPageCard(page)}
             </li>
           ))}
         </ul>
         </div>
+        )}
         </>
       )}
     </div>
