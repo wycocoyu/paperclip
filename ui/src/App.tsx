@@ -76,6 +76,7 @@ import { TeamRules } from "./pages/TeamRules";
 import { Hooks } from "./pages/Hooks";
 import { TeamSkills } from "./pages/TeamSkills";
 import { TeamWiki } from "./pages/TeamWiki";
+import { TeamTemplates } from "./pages/TeamTemplates";
 import { OpenSpec } from "./pages/OpenSpec";
 import { SkillStudio } from "./pages/SkillStudio";
 import { Secrets } from "./pages/Secrets";
@@ -202,6 +203,7 @@ function boardRoutes() {
       <Route path="skills/*" element={<CompanySkills />} />
       <Route path="team-rules" element={<TeamRules />} />
       <Route path="team-skills" element={<TeamSkills />} />
+      <Route path="team-templates" element={<TeamTemplates />} />
       <Route path="hooks" element={<Hooks />} />
       {/* Bare /team-wiki lands on the agent space (user 2026-09-09); the space is a path
           segment so a link to either one survives sharing and reload. */}

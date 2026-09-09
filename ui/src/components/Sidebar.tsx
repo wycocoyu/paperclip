@@ -12,6 +12,7 @@ import {
   SquarePen,
   Network,
   Boxes,
+  ClipboardList,
   Repeat,
   Layers,
   GitBranch,
@@ -294,6 +295,7 @@ export function Sidebar() {
           <SidebarNavItem to="/team-wiki" label={t("Team Wiki")} icon={BookOpen} />
           <SidebarNavItem to="/openspec" label="OpenSpec" icon={FileText} />
           <SidebarNavItem to="/team-skills" label="Team Skills" icon={Boxes} />
+          <SidebarNavItem to="/team-templates" label="Team Templates" icon={ClipboardList} />
           <SidebarNavItem to="/hooks" label={t("Hooks")} icon={Webhook} />
         </SidebarSection>
 
