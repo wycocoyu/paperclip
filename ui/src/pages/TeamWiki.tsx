@@ -27,7 +27,7 @@ const SPACES = ["paperclip", "agent", "personal"] as const;
 type Space = (typeof SPACES)[number];
 /** The team page's switcher shows team spaces only; personal lives behind its
  *  own Personal assets entry (tabs isolated, machinery shared — user 2026-08-26). */
-const TEAM_SPACES = ["paperclip", "agent"] as const;
+const TEAM_SPACES = ["agent", "paperclip"] as const;
 /** Tool tabs render proper casing even though paths are lowercase. */
 const TOOL_LABELS: Record<string, string> = {
   claude: "Claude",
@@ -344,7 +344,7 @@ export function TeamWiki({ fixedSpace }: { fixedSpace?: Space } = {}) {
   const agentNames = useAgentNames(selectedCompanyId);
   const toolBrandIcons = useToolBrandIcons(selectedCompanyId);
 
-  const space: Space = fixedSpace ?? (isSpace(params.space) ? params.space : "paperclip");
+  const space: Space = fixedSpace ?? (isSpace(params.space) ? params.space : "agent");
   /**
    * 归档 (MUL-455): a third tab beside the two team spaces, showing every
    * retired page in the company. One shelf rather than one per space, because
