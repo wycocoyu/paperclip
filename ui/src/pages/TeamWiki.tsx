@@ -308,9 +308,13 @@ function WikiTreeBrowser({
   }
 
   return (
-    <div className="flex flex-col gap-6 sm:flex-row">
-      <nav className="sm:w-60 sm:shrink-0" aria-label="目录" data-testid="wiki-dir-nav">
-        <p className="mb-1 px-2 text-(length:--text-micro) font-semibold uppercase tracking-wide text-muted-foreground">
+    <div className="flex min-h-0 w-full flex-col sm:flex-row">
+      <nav
+        className="shrink-0 overflow-y-auto border-b border-border py-3 sm:w-72 sm:border-b-0 sm:border-r"
+        aria-label="目录"
+        data-testid="wiki-dir-nav"
+      >
+        <p className="mb-1 px-4 text-(length:--text-micro) font-semibold uppercase tracking-wide text-muted-foreground">
           目录
         </p>
         <FileTree
@@ -320,13 +324,18 @@ function WikiTreeBrowser({
           onToggleDir={toggleDir}
           onSelectFile={setSelectedPath}
           showCheckboxes={false}
+          // The rail is sized to hold a whole page name on one line; FileTree's
+          // default break-all would fold long ones onto a second row anyway.
+          wrapLabels={false}
           ariaLabel="Wiki 目录"
           empty={{ title: "还没有页面" }}
         />
       </nav>
-      <div className="min-w-0 flex-1" data-testid="wiki-page-pane">
+      <div className="min-w-0 flex-1 overflow-y-auto px-6 py-5" data-testid="wiki-page-pane">
         {activePage ? (
-          <div className="rounded-lg border border-border p-4">{renderPage(activePage)}</div>
+          // The pane spans the rest of the window, but prose past ~1024px is
+          // hard to read, so the body keeps its own cap inside it.
+          <div className="w-full max-w-5xl">{renderPage(activePage)}</div>
         ) : (
           <p className="text-xs text-muted-foreground">从左侧目录选一个页面。</p>
         )}
@@ -544,8 +553,20 @@ export function TeamWiki({ fixedSpace }: { fixedSpace?: Space } = {}) {
   const showTree = !fixedSpace && !isArchive;
   const expandedStorageKey = `${WIKI_EXPANDED_STORAGE_PREFIX}:${selectedCompanyId ?? "global"}:${space}`;
 
+  /**
+   * A tree space owns the whole main area: the rail has to reach the app
+   * sidebar, so it cancels <main>'s padding the way RoutineDetail does. The
+   * archive and the personal files are flat lists that read fine in the
+   * centred column, so they keep it.
+   */
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-6 px-6 py-8">
+    <div
+      className={
+        showTree
+          ? "-m-4 flex min-h-0 flex-col space-y-4 px-6 pt-5 sm:h-full md:-m-6"
+          : "mx-auto w-full max-w-4xl space-y-6 px-6 py-8"
+      }
+    >
       <header className="space-y-1">
         <h1 className="flex items-center gap-2 text-lg font-semibold">
           <BookOpen className="h-5 w-5 text-sky-600 dark:text-sky-400" aria-hidden />{" "}
@@ -675,12 +696,16 @@ export function TeamWiki({ fixedSpace }: { fixedSpace?: Space } = {}) {
           </div>
         ) : null}
         {showTree ? (
-          <WikiTreeBrowser
-            key={`${selectedCompanyId ?? "none"}:${space}`}
-            pages={pages}
-            storageKey={expandedStorageKey}
-            renderPage={renderPageCard}
-          />
+          // -mx-6 undoes the header's gutter so the rail sits flush against the
+          // app sidebar; min-h-0 lets the rail and the body scroll separately.
+          <div className="-mx-6 flex min-h-0 flex-1 border-t border-border">
+            <WikiTreeBrowser
+              key={`${selectedCompanyId ?? "none"}:${space}`}
+              pages={pages}
+              storageKey={expandedStorageKey}
+              renderPage={renderPageCard}
+            />
+          </div>
         ) : (
         <div className={fixedSpace ? "" : "flex flex-col gap-6 sm:flex-row"}>
         {fixedSpace ? null : (
