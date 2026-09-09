@@ -107,7 +107,7 @@ export function TeamSkills() {
           ))}
         </div>
         {skillsQuery.isLoading ? <p className="text-xs text-muted-foreground">加载…</p> : null}
-        <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
+        <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(22rem,1fr))]">
           {visible.map((skill) => (
             <Link
               key={skill.id}

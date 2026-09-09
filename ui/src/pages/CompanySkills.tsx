@@ -1460,7 +1460,7 @@ export function DiscoveryGrid({
                   : t("{{count}} skills", { count: sourceFilteredCards.length })}
                 {activeCategory ? <span className="capitalize"> · {activeCategory}</span> : null}
               </p>
-              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(22rem,1fr))]">
                 {sourceFilteredCards.map((card) => (
                   <SkillCard
                     key={card.key}
