@@ -681,6 +681,9 @@ Plugins that perform durable work should declare managed Paperclip resources rat
 - `routines` + `ctx.routines.managed.*` for schedule/webhook/manual execution with issue trails (`routines.managed` required)
 - `skills` + `ctx.skills.managed.*` for reusable agent capabilities (`skills.managed` required)
 
+The LLM Wiki plugin is the current reference for this pattern: it declares managed
+agents, projects, routines, and skills in manifest, reconciles them per company,
+and uses managed routines for periodic wiki maintenance and ingest operations.
 Content-oriented plugins should follow the same model instead of running
 unmanaged background loops: make the LLM-facing worker an operator-visible
 managed agent, attach reusable prompt/tool guidance as managed skills, keep

@@ -168,7 +168,7 @@ Do not hide long-lived work behind private plugin state when it should be visibl
 to the board, scoped to a company, audited, budgeted, and assigned like normal
 Paperclip work.
 
-Content-oriented plugins, such as ingestion pipelines or durable knowledge
+Content-oriented plugins, such as LLM Wiki-style ingestion or durable knowledge
 systems, should use the same pattern: managed projects for operation issues,
 managed agents plus managed skills for LLM work, and managed routines for
 ingest, lint, refresh, or maintenance runs.
@@ -481,6 +481,8 @@ export function WikiTree() {
 
 Good fits:
 
+- LLM Wiki page navigation in `packages/plugins/plugin-llm-wiki` builds a
+  `FileTreeNode[]` from worker query results and renders it through `FileTree`.
 - The example `plugin-file-browser-example` lazily fetches a directory's
   children through a `loadFileList` action when `onToggleDir` fires, then
   merges the children into the local tree state — letting the shared component
@@ -555,8 +557,8 @@ shared `FileTree` stays the rendering surface.
 
 ### Mixing surfaces
 
-A single plugin can use more than one of these. A content plugin can use
-`localFolders` for its content root, then render the resulting page list
+A single plugin can use more than one of these. The LLM Wiki uses
+`localFolders` for its content root, then renders the resulting page list
 through `FileTree`. The file browser example uses `ctx.projects.listWorkspaces`
 to pick a workspace and renders its on-disk tree through `FileTree` with lazy
 loading. Pick the boundary per data source, not per plugin.

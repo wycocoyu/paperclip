@@ -16,7 +16,7 @@ import { test, expect, request as pwRequest, type APIRequestContext } from "@pla
  * code path (one `secondarySidebar`/`hasSecondarySidebar` resolver drives both
  * company-settings and plugin routes) and is covered by the unit tests in
  * `ui/src/components/Layout.test.tsx`. A live plugin-route e2e requires the
- * a route-owning plugin to be installed in the throwaway e2e instance, which
+ * `plugin-llm-wiki` plugin to be installed in the throwaway e2e instance, which
  * is out of scope for this default local_trusted run; visual QA of both panes
  * is delegated to the QA child issue.
  */

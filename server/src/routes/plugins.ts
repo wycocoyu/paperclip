@@ -180,6 +180,7 @@ const PLUGIN_SCOPED_API_RESPONSE_HEADER_ALLOWLIST = new Set([
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXPERIMENTAL_BUNDLED_PLUGIN_PACKAGE_NAMES = new Set([
+  "@paperclipai/plugin-llm-wiki",
   "@paperclipai/plugin-modal",
   "@paperclipai/plugin-workspace-diff",
 ]);

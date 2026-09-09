@@ -160,10 +160,12 @@ describe.sequential("plugin install and upgrade authz", () => {
       res.body.map((plugin: { packageName: string; experimental: boolean; hasBuiltEntrypoints: boolean }) => [plugin.packageName, plugin]),
     );
     expect(packageNames).toContain("@paperclipai/plugin-workspace-diff");
+    expect(packageNames).toContain("@paperclipai/plugin-llm-wiki");
     expect(packageNames).toContain("@paperclipai/plugin-modal");
     expect(packageNames).toContain("@paperclipai/plugin-authoring-smoke-example");
     expect(packageNames).not.toContain("@paperclipai/plugin-sdk");
     expect(byPackageName.get("@paperclipai/plugin-workspace-diff")?.experimental).toBe(true);
+    expect(byPackageName.get("@paperclipai/plugin-llm-wiki")?.experimental).toBe(true);
     expect(byPackageName.get("@paperclipai/plugin-modal")?.experimental).toBe(true);
     expect(byPackageName.get("@paperclipai/plugin-authoring-smoke-example")?.experimental).toBe(false);
     expect(typeof byPackageName.get("@paperclipai/plugin-workspace-diff")?.hasBuiltEntrypoints).toBe("boolean");
