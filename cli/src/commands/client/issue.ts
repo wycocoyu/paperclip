@@ -1188,6 +1188,179 @@ export function registerIssueCommands(program: Command): void {
       }),
   );
 
+/**
+ * openspec 链接：卡上挂的是 store 里的一条路径，不是内容的副本。store 是服务端
+ * 磁盘上的 git 检出，所以路径在哪个环境都成立，而一条写死的 URL 会带着写入时
+ * 的域名和公司前缀，换个环境就废。前端拿这个路径现拼跳转链接。
+ */
+const OPENSPEC_WORK_PRODUCT_TYPE = "openspec";
+
+type OpenSpecLinkOptions = BaseClientOptions & { title?: string };
+
+/** store 里的全部可读文件，用来判断一条路径是不是真的存在。 */
+async function fetchOpenSpecFiles(ctx: ResolvedClientContext): Promise<string[]> {
+  const listing = await ctx.api.get<{ available: boolean; root: string; files: Array<{ path: string }> }>(
+    apiPath`/api/companies/${ctx.companyId}/openspec/files`,
+  );
+  if (!listing?.available) {
+    throw new Error(`服务端没找到 openspec 仓（读取路径 ${listing?.root ?? "未知"}），先把它检出到位再挂链接。`);
+  }
+  return (listing.files ?? []).map((file) => file.path);
+}
+
+/** 去掉首尾斜杠，让 `/changes/x/` 和 `changes/x` 存成同一条。 */
+function normalizeStorePath(input: string): string {
+  return input.trim().replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+/**
+ * 路径必须指向 store 里真实存在的东西：一个文件，或一个装着文件的目录。挂之前
+ * 就报错，比让人点开才发现「不在仓里」强——链接写错的那一刻离得越近越好改。
+ */
+function assertStorePathExists(storePath: string, filePaths: string[]): { isDirectory: boolean } {
+  if (filePaths.includes(storePath)) return { isDirectory: false };
+  const prefix = `${storePath}/`;
+  if (filePaths.some((path) => path.startsWith(prefix))) return { isDirectory: true };
+  const near = filePaths.filter((path) => path.includes(storePath.split("/").pop() ?? "")).slice(0, 5);
+  throw new Error(
+    [
+      `openspec 仓里没有这条路径：${storePath}`,
+      near.length > 0 ? `形近的有：\n  ${near.join("\n  ")}` : "路径从 store 根算起，通常以 openspec/ 开头；OpenSpec 页签里的目录树就是它。",
+    ].join("\n"),
+  );
+}
+
+/**
+ * 标题默认从路径推：目录用它自己的名字，文件带上所属 change，因为一张卡可能挂
+ * 好几个 change 的 proposal.md，只写文件名分不出是哪个。面板第二行本来就显示
+ * 完整路径，所以标题只要够认出是哪一份就行。
+ */
+function defaultOpenSpecTitle(storePath: string, isDirectory: boolean): string {
+  const segments = storePath.split("/").filter(Boolean);
+  const last = segments[segments.length - 1] ?? storePath;
+  // 归档目录名带 `2026-09-09-` 这样的日期前缀。日期在标题里占掉半行又说不出
+  // 是哪个 change，剥掉；面板第二行显示的完整路径里它还在，需要时看得到。
+  const changeName = (name: string) => name.replace(/^\d{4}-\d{2}-\d{2}-/, "");
+  if (isDirectory) return changeName(last);
+  const parent = segments[segments.length - 2];
+  return parent ? `${changeName(parent)}/${last}` : last;
+}
+
+/** 归档过的 change 住在 `changes/archive/` 下，状态跟着路径走，不用每次手写。 */
+function openSpecStatusFor(storePath: string): "active" | "archived" {
+  return storePath.includes("/archive/") ? "archived" : "active";
+}
+
+function openSpecLinkRows(rows: unknown): Array<{ id: string; title: string; storePath: string | null; status: string }> {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((row): row is Record<string, any> =>
+      Boolean(row) && (row as Record<string, unknown>).type === OPENSPEC_WORK_PRODUCT_TYPE)
+    .map((row) => ({
+      id: String(row.id),
+      title: String(row.title ?? ""),
+      storePath: typeof row.metadata?.storePath === "string" ? row.metadata.storePath : null,
+      status: String(row.status ?? ""),
+    }));
+}
+
+  addCommonClientOptions(
+    issue
+      .command("openspec:link")
+      .description("Attach an openspec store path (a change directory or one file) to an issue")
+      .argument("<issueId>", "Issue ID or identifier")
+      .argument("<storePath>", "Store-relative path, e.g. openspec/changes/<change> or .../proposal.md")
+      .option("--title <title>", "Display title (defaults to the change or file name)")
+      .action(async (issueId: string, storePathArg: string, opts: OpenSpecLinkOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts);
+          const issue = await ctx.api.get<Issue>(apiPath`/api/issues/${issueId}`);
+          if (!issue) throw new Error(`Issue not found: ${issueId}`);
+
+          const storePath = normalizeStorePath(storePathArg);
+          const { isDirectory } = assertStorePathExists(storePath, await fetchOpenSpecFiles(ctx));
+          const title = opts.title?.trim() || defaultOpenSpecTitle(storePath, isDirectory);
+
+          // 同一条路径挂第二次改的是已有那条，不是再堆一行：重跑一次命令是常态
+          // （换了标题、脚本重放），重复的行只会让面板越读越乱。
+          const existing = openSpecLinkRows(
+            await ctx.api.get(apiPath`/api/issues/${issue.id}/work-products`),
+          ).find((row) => row.storePath === storePath);
+          if (existing) {
+            const updated = await ctx.api.patch(apiPath`/api/work-products/${existing.id}`, {
+              title,
+              status: openSpecStatusFor(storePath),
+            });
+            printOutput(updated, { json: ctx.json });
+            return;
+          }
+
+          const created = await ctx.api.post(apiPath`/api/issues/${issue.id}/work-products`, {
+            type: OPENSPEC_WORK_PRODUCT_TYPE,
+            provider: "paperclip",
+            title,
+            status: openSpecStatusFor(storePath),
+            metadata: { storePath },
+          });
+          printOutput(created, { json: ctx.json });
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+  );
+
+  addCommonClientOptions(
+    issue
+      .command("openspec:unlink")
+      .description("Remove an openspec link from an issue by its store path")
+      .argument("<issueId>", "Issue ID or identifier")
+      .argument("<storePath>", "The store path that was linked")
+      .action(async (issueId: string, storePathArg: string, opts: BaseClientOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts);
+          const issue = await ctx.api.get<Issue>(apiPath`/api/issues/${issueId}`);
+          if (!issue) throw new Error(`Issue not found: ${issueId}`);
+          const storePath = normalizeStorePath(storePathArg);
+          const match = openSpecLinkRows(
+            await ctx.api.get(apiPath`/api/issues/${issue.id}/work-products`),
+          ).find((row) => row.storePath === storePath);
+          if (!match) throw new Error(`这张卡上没挂 ${storePath}`);
+          await ctx.api.delete(apiPath`/api/work-products/${match.id}`);
+          printOutput({ removed: match.id, storePath }, { json: ctx.json });
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+  );
+
+  addCommonClientOptions(
+    issue
+      .command("openspec:links")
+      .description("List the openspec links on an issue")
+      .argument("<issueId>", "Issue ID or identifier")
+      .action(async (issueId: string, opts: BaseClientOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts);
+          const issue = await ctx.api.get<Issue>(apiPath`/api/issues/${issueId}`);
+          if (!issue) throw new Error(`Issue not found: ${issueId}`);
+          const rows = openSpecLinkRows(
+            await ctx.api.get(apiPath`/api/issues/${issue.id}/work-products`),
+          );
+          if (ctx.json) {
+            printOutput(rows, { json: true });
+            return;
+          }
+          if (rows.length === 0) {
+            console.log("这张卡还没挂 openspec。用 `issue openspec:link <卡号> <路径>` 挂上。");
+            return;
+          }
+          for (const row of rows) console.log(`${row.title}  [${row.status}]\n  ${row.storePath ?? "(没有路径)"}`);
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+  );
+
   addCommonClientOptions(
     issue
       .command("work-product:create")
