@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "@/lib/router";
+import { OPENSPEC_PATH_PARAM } from "@/lib/openspec-links";
 import { FileText } from "lucide-react";
 import { api } from "@/api/client";
 import { useCompany } from "@/context/CompanyContext";
@@ -61,13 +63,33 @@ function StoreTreeBrowser({ companyId, files, storageKey }: {
   const [expandedDirs, setExpandedDirs] = useState(() =>
     readExpandedDirs(storageKey, collectAllPaths(nodes, "dir")),
   );
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // The selected file lives in the URL, not in component state: a link to one
+  // spec has to survive being shared, reloaded or linked to from an issue.
+  // `replace` keeps browsing the tree from stacking one history entry per
+  // click — Back should leave the page, not walk back through every file.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedPath = searchParams.get(OPENSPEC_PATH_PARAM);
+  const setSelectedPath = useCallback(
+    (path: string) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set(OPENSPEC_PATH_PARAM, path);
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
   const rail = useResizableRail({ storageKey: "paperclip.openspec.railWidth" });
 
-  // A refetch can retire the selected path, so fall back to the first file
+  // A refetch — or a link pointing at a file that has since been renamed or
+  // archived — can retire the requested path, so fall back to the first file
   // instead of leaving the reading pane blank.
   const activePath =
     selectedPath && filePaths.includes(selectedPath) ? selectedPath : (filePaths[0] ?? null);
+  const requestedButMissing = Boolean(selectedPath) && selectedPath !== activePath;
 
   const fileQuery = useQuery({
     queryKey: ["openspec", "file", companyId, activePath],
@@ -120,6 +142,14 @@ function StoreTreeBrowser({ companyId, files, storageKey }: {
       <div className="min-w-0 flex-1 overflow-y-auto px-6 py-5" data-testid="openspec-file-pane">
         {activePath ? (
           <div className="w-full space-y-3">
+            {requestedButMissing ? (
+              <p
+                className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+                data-testid="openspec-missing-path"
+              >
+                链接指向的 <code>{selectedPath}</code> 不在仓里了（改名或已归档），下面显示的是第一个文件。
+              </p>
+            ) : null}
             <p className="text-xs text-muted-foreground">{activePath}</p>
             {fileQuery.data ? (
               <MarkdownBody>{asMarkdown(activePath, fileQuery.data.content)}</MarkdownBody>

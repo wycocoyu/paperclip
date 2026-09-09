@@ -19,6 +19,7 @@ import {
   Download,
   ExternalLink,
   FileText,
+  FolderGit2,
   GitBranch,
   GitCommit,
   Globe,
@@ -40,7 +41,8 @@ import { attachmentOpenPath } from "@/lib/issue-attachments";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { DocumentAnnotationsCountChip, IssueDocumentAnnotations } from "@/components/IssueDocumentAnnotations";
 import { cn } from "@/lib/utils";
-import { useLocation } from "@/lib/router";
+import { Link, useLocation } from "@/lib/router";
+import { openSpecPathHref } from "@/lib/openspec-links";
 
 interface IssuePropertiesArtifactsTabProps {
   issue: Issue;
@@ -133,6 +135,62 @@ function WorkProductRow({ workProduct }: { workProduct: IssueWorkProduct }) {
     );
   }
   return <div className={ROW_CLASS}>{body}</div>;
+}
+
+/**
+ * A link into the openspec store, rendered as an in-app row rather than the
+ * external-link treatment `WorkProductRow` gives every other type: the target
+ * is the OpenSpec tab in this same app, so it routes rather than opening a
+ * tab, and `Link` supplies the company prefix.
+ *
+ * The row shows the store-relative path it points at, because that is what a
+ * reader recognizes — the work product's title is often just the change name,
+ * and two changes can share one. A path ending in a slash (or carrying no file
+ * extension) is a directory, which gets the folder icon.
+ */
+function OpenSpecRow({ workProduct }: { workProduct: IssueWorkProduct }) {
+  const storePath = typeof workProduct.metadata?.storePath === "string"
+    ? workProduct.metadata.storePath
+    : null;
+  // The href is derived from the stored path rather than persisted alongside
+  // it: one record, one truth. A saved absolute URL would carry whatever host
+  // and company prefix it was written under and break on every other
+  // environment, while `Link` supplies the prefix for wherever this renders.
+  const href = storePath ? openSpecPathHref(storePath) : null;
+  const isDirectory = storePath !== null && !/\.[a-z0-9]+$/i.test(storePath.replace(/\/+$/, ""));
+  const Icon = isDirectory ? FolderGit2 : FileText;
+  // Title and path stack instead of sharing one line: the panel is narrower
+  // than a store path, and side by side the path ate the title whole. The
+  // path is also truncated from the *left* (`direction: rtl` with an isolated
+  // run) because its identifying half is the tail — `.../mul-523-dedup/proposal.md`
+  // says which spec, `openspec/changes/archive/...` says nothing.
+  const body = (
+    <>
+      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 self-start text-muted-foreground" />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate">{workProduct.title}</span>
+        {storePath ? (
+          <span
+            dir="rtl"
+            className="truncate text-left text-(length:--text-micro) text-muted-foreground"
+            title={storePath}
+          >
+            <bdi>{storePath}</bdi>
+          </span>
+        ) : null}
+      </span>
+    </>
+  );
+  // A row with no resolvable target still renders — a link the store no longer
+  // answers for is information, and hiding it would look like nothing was ever
+  // attached.
+  const rowClass = cn(ROW_CLASS, "items-start");
+  if (!href) return <div className={rowClass}>{body}</div>;
+  return (
+    <Link to={href} className={cn(rowClass, "hover:bg-accent/50")}>
+      {body}
+    </Link>
+  );
 }
 
 /**
@@ -410,14 +468,22 @@ export function IssuePropertiesArtifactsTab({ issue, documentDeepLink }: IssuePr
   });
   const { data: documents } = useIssueDocuments(issue.id);
 
-  const workProductRows = workProducts ?? [];
+  // openspec links get their own section, so they must not also render under
+  // Work products — one record, one place.
+  const workProductRows = (workProducts ?? []).filter((wp) => wp.type !== "openspec");
+  const openSpecRows = (workProducts ?? []).filter((wp) => wp.type === "openspec");
   // Proxy review documents (`artifact-review-*`) present only through their
   // originating Work product row, never as standalone Documents rows.
   const documentRows = (documents ?? []).filter((doc) => !isArtifactReviewDocumentKey(doc.key));
   const reviewDocsByKey = new Map((documents ?? []).map((doc) => [doc.key, doc]));
   const fileRows = selectAgentArtifactAttachments(attachments, workProducts);
 
-  if (workProductRows.length === 0 && documentRows.length === 0 && fileRows.length === 0) {
+  if (
+    workProductRows.length === 0
+    && openSpecRows.length === 0
+    && documentRows.length === 0
+    && fileRows.length === 0
+  ) {
     return (
       <div className="px-1 py-6 text-sm text-muted-foreground">
         No artifacts yet. Work products, documents, and agent-produced files will appear here.
@@ -455,6 +521,18 @@ export function IssuePropertiesArtifactsTab({ issue, documentDeepLink }: IssuePr
                 </li>
               );
             })}
+          </ul>
+        </>
+      ) : null}
+      {openSpecRows.length > 0 ? (
+        <>
+          <SectionHeading>OpenSpec</SectionHeading>
+          <ul className="flex flex-col gap-1">
+            {openSpecRows.map((wp) => (
+              <li key={wp.id}>
+                <OpenSpecRow workProduct={wp} />
+              </li>
+            ))}
           </ul>
         </>
       ) : null}
