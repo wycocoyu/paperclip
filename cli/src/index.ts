@@ -1,5 +1,8 @@
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { warnIfUnsupportedNodeVersion } from "@paperclipai/shared/node-version";
+import { warnIfBundleStale } from "./bundle-freshness.js";
 import { onboard } from "./commands/onboard.js";
 import { doctor } from "./commands/doctor.js";
 import { envCommand } from "./commands/env.js";
@@ -262,6 +265,8 @@ registerClientAuthCommands(auth);
 
 async function main(): Promise<void> {
   warnIfUnsupportedNodeVersion(process.versions.node, (message) => console.warn(message));
+  // stderr 而不是 stdout：--json 的输出会被管道接走，一行告警不该混进去。
+  warnIfBundleStale(dirname(fileURLToPath(import.meta.url)), (message) => console.error(message));
 
   let failed = false;
   try {
