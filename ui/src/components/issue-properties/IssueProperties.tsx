@@ -2287,7 +2287,7 @@ export function IssueProperties({
             reviewer_session 三列还在库里，只是不再单独占一行：一次评审也是
             一次写入，它已经在这个列表里了。 */}
         <PropertyRow label="参与的 session" wrap>
-          <ParticipantSessions issueId={issue.id} />
+          <ParticipantSessions issueId={issue.id} agents={agents ?? []} agentById={agentById} />
         </PropertyRow>
         {/* A default field, not a conditional one: a card with no branch should
             say so. Hiding the row made "never registered" and "you are looking

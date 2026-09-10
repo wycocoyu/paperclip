@@ -2585,7 +2585,10 @@ registry.registerPath({
   summary: "Add a participant session by hand",
   request: {
     params: z.object({ id: z.string() }),
-    body: jsonBody(z.object({ sessionId: z.string().min(1).max(200) })),
+    body: jsonBody(z.object({
+      sessionId: z.string().min(1).max(200),
+      agentId: z.string().uuid().nullish(),
+    })),
   },
   responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
 });

@@ -1,4 +1,5 @@
 import { pgTable, uuid, text, timestamp, index, primaryKey } from "drizzle-orm/pg-core";
+import { agents } from "./agents.js";
 import { issues } from "./issues.js";
 
 export const issueParticipantSessions = pgTable(
@@ -6,6 +7,9 @@ export const issueParticipantSessions = pgTable(
   {
     issueId: uuid("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
     sessionId: text("session_id").notNull(),
+    // 认得出是谁写的：id 是裸 uuid，光看它分不出 Claude / Codex / ZCode。
+    // 可空——界面写入没有终端 agent，手工补录也允许不指认。
+    agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }),
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
     source: text("source").notNull().default("auto"),
   },

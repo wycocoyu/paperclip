@@ -8625,7 +8625,10 @@ export function issueRoutes(
 
   router.post(
     "/issues/:id/participant-sessions",
-    validate(z.object({ sessionId: z.string().trim().min(1).max(200) })),
+    validate(z.object({
+      sessionId: z.string().trim().min(1).max(200),
+      agentId: z.string().uuid().nullish(),
+    })),
     async (req, res) => {
       const id = req.params.id as string;
       const issue = await getAccessibleResource(req, res, svc.getById(id), "Issue not found");
@@ -8634,9 +8637,23 @@ export function issueRoutes(
         res.status(403).json({ error: "Board authentication required" });
         return;
       }
+      const agentId = (req.body.agentId as string | null | undefined) ?? null;
+      if (agentId) {
+        // 只能补自己公司的 agent：补录是人手写进去的，不校验就等于让一张卡把
+        // 参与记在实例里任意一个 agent 头上。
+        const [agent] = await db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(and(eq(agents.id, agentId), eq(agents.companyId, issue.companyId)));
+        if (!agent) {
+          res.status(422).json({ error: "agentId does not belong to this company" });
+          return;
+        }
+      }
       await recordParticipantSession(db, {
         issueId: issue.id,
         sessionId: req.body.sessionId,
+        agentId,
         source: "manual",
       });
       res.json(await listParticipantSessions(db, issue.id));

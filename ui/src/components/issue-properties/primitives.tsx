@@ -112,6 +112,8 @@ export function SessionIdentity({
   agentAdapterType,
   userId,
   sessionId,
+  shortSessionId,
+  unattributedLabel,
   tag,
   live,
 }: {
@@ -123,10 +125,14 @@ export function SessionIdentity({
   agentAdapterType?: string | null;
   userId: string | null;
   sessionId: string | null;
+  /** Lists show the id abbreviated; the full one stays in the chip's tooltip. */
+  shortSessionId?: boolean;
+  /** Shown in place of the name when the row has neither agent nor user. */
+  unattributedLabel?: string;
   tag?: string;
   live?: boolean;
 }) {
-  const label = agentId ? (agentName ?? agentId.slice(0, 8)) : userId;
+  const label = agentId ? (agentName ?? agentId.slice(0, 8)) : userId ?? unattributedLabel ?? null;
   if (!label && !sessionId) {
     return <span className="text-sm text-muted-foreground">{t("Unknown")}</span>;
   }
@@ -138,7 +144,8 @@ export function SessionIdentity({
           {agentId ? (
             <AgentIcon icon={agentIcon} customIconUrl={agentCustomIconUrl} className="h-3.5 w-3.5 shrink-0" />
           ) : null}
-          <span className="truncate text-sm">{label}</span>
+          {/* 认不出来的行不装成一个名字：文案压成次要色。 */}
+          <span className={cn("truncate text-sm", !agentId && !userId && "text-muted-foreground")}>{label}</span>
         </span>
       )}
       {sessionId && (
@@ -146,6 +153,7 @@ export function SessionIdentity({
           sessionId={sessionId}
           agentName={agentName}
           agentAdapterType={agentAdapterType}
+          shorten={shortSessionId}
         />
       )}
       {tag && (
@@ -174,10 +182,12 @@ function SessionIdChip({
   sessionId,
   agentName,
   agentAdapterType,
+  shorten,
 }: {
   sessionId: string;
   agentName: string | null;
   agentAdapterType?: string | null;
+  shorten?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -205,7 +215,7 @@ function SessionIdChip({
         aria-label={`Copy ${copyText} to clipboard`}
         className="max-w-full cursor-pointer break-all rounded-sm border border-border bg-muted/40 px-1.5 text-left font-mono text-(length:--text-micro) text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
       >
-        {sessionId}
+        {shorten ? sessionId.slice(0, 8) : sessionId}
       </button>
       {copied && (
         <span className="flex shrink-0 items-center gap-1 text-(length:--text-micro) text-emerald-600 dark:text-emerald-400" role="status">
