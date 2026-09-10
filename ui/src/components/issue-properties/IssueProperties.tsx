@@ -68,6 +68,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ParticipantSessions } from "./ParticipantSessions";
 import { IssuePropertiesPlansTab } from "./IssuePropertiesPlansTab";
 import { IssuePropertiesArtifactsTab } from "./IssuePropertiesArtifactsTab";
 import { IssuePropertiesProgressTab, isProgressNoteComment } from "./IssuePropertiesProgressTab";
@@ -2278,34 +2279,15 @@ export function IssueProperties({
             <span className="text-sm text-muted-foreground">{t("Unclaimed")}</span>
           )}
         </PropertyRow>
-        {/* 评审会话 (MUL-456, 写入时机由 MUL-457 改定): review usually runs on
-            another terminal, so this is the session hardest to find again and
-            the only one the card had nowhere to record.
+        {/* 参与的 session (MUL-591)：换一个终端接着干这张卡，原来的三个单值槽
+            （开卡 / 开工 / 评审）没有一个记得住，于是把「写过这张卡的会话」
+            攒成列表。判据是写过东西，不是「开工」—— 后者混进了状态语义，
+            只改文档、只发进度的会话会被漏掉。
 
-            Filled by hand, never automatically. Wiring it to `issue qa` looked
-            tempting, but that command files any Q&A pair — auto-filling would
-            mark ordinary exchanges as reviews, and then the row would answer a
-            different question than the one it is here to answer.
-
-            Always rendered, like 分支 below: "nobody reviewed this" is a real
-            answer and has to look different from "wrong section". */}
-        <PropertyRow label={t("Reviewer Session")}>
-          {issue.reviewerSession || issue.reviewerAgentId ? (
-            <SessionIdentity
-              agentId={issue.reviewerAgentId ?? null}
-              agentName={(agentById.get(issue.reviewerAgentId ?? "") ?? null)?.name ?? null}
-              agentIcon={(agentById.get(issue.reviewerAgentId ?? "") ?? null)?.icon ?? null}
-              agentCustomIconUrl={(() => {
-                const reviewer = agentById.get(issue.reviewerAgentId ?? "") ?? null;
-                return reviewer ? agentCustomIcon(reviewer) : null;
-              })()}
-              agentAdapterType={(agentById.get(issue.reviewerAgentId ?? "") ?? null)?.adapterType ?? null}
-              userId={null}
-              sessionId={issue.reviewerSession ?? null}
-            />
-          ) : (
-            <span className="text-sm text-muted-foreground">未评审</span>
-          )}
+            reviewer_session 三列还在库里，只是不再单独占一行：一次评审也是
+            一次写入，它已经在这个列表里了。 */}
+        <PropertyRow label="参与的 session" wrap>
+          <ParticipantSessions issueId={issue.id} />
         </PropertyRow>
         {/* A default field, not a conditional one: a card with no branch should
             say so. Hiding the row made "never registered" and "you are looking
