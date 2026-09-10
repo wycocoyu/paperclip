@@ -480,10 +480,10 @@ async function maybePreflightMigrations(options: { interactive?: boolean; autoAp
   await refreshPendingMigrations();
 }
 
-async function buildPluginSdk() {
-  console.log("[paperclip] building plugin sdk...");
+async function buildWorkspacePackage(filter: string, label: string) {
+  console.log(`[paperclip] building ${label}...`);
   const result = await runPnpm(
-    ["--filter", "@paperclipai/plugin-sdk", "build"],
+    ["--filter", filter, "build"],
     { stdio: "inherit" },
   );
   if (result.signal) {
@@ -491,7 +491,7 @@ async function buildPluginSdk() {
     return;
   }
   if (result.code !== 0) {
-    console.error("[paperclip] plugin sdk build failed");
+    console.error(`[paperclip] ${label} build failed`);
     process.exit(result.code);
   }
 }
@@ -558,7 +558,12 @@ async function stopChildForRestart() {
 }
 
 async function startServerChild() {
-  await buildPluginSdk();
+  await buildWorkspacePackage("@paperclipai/plugin-sdk", "plugin sdk");
+  // cli/ is watched (a change there restarts the server), but the terminals
+  // talk to Paperclip through the bundled cli/dist, not through cli/src —
+  // without this the restart looks like the CLI change took effect while the
+  // bundle on disk stays whatever it was at the last explicit build.
+  await buildWorkspacePackage("paperclipai", "cli");
 
   const serverScript = mode === "watch" ? "dev:watch" : "dev";
   child = spawn(
