@@ -166,8 +166,8 @@ def sync_skills(since):
         if not slug or slug in SKIP_SKILLS or not newer(s.get("updatedAt"), since):
             continue
         try:
-            f = get(f"/api/companies/{COMPANY}/skills/{s['id']}/files?path=SKILL.md")
-            body = f.get("content") if isinstance(f, dict) else ""
+            resp = get(f"/api/companies/{COMPANY}/skills/{s['id']}/files?path=SKILL.md")
+            body = resp.get("content") if isinstance(resp, dict) else ""
         except Exception as e:
             log(f"  ! skill {slug} 读不到 SKILL.md: {e}"); f += 1; continue
         if not body:
