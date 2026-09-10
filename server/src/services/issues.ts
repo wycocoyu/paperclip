@@ -65,6 +65,7 @@ import {
   isUuidLike,
   normalizeIssueIdentifier as normalizeIssueReferenceIdentifier,
 } from "@paperclipai/shared";
+import { DOCUMENT_SKELETONS } from "@paperclipai/shared/document-skeletons";
 import { conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { isForeignKeyViolation } from "../db-errors.js";
 import { logger } from "../middleware/logger.js";
@@ -386,6 +387,66 @@ type DerivedIssueCommentAttribution = {
   derivedCreatedByRunId: string;
   derivedAuthorSource: IssueCommentDerivedAuthorSource;
 };
+
+/**
+ * 开卡就把 decision-log 建出来 (MUL-590, 老板令 2026-09-09)。
+ *
+ * 这份文档原来要等第一次写入才存在，而系统对它唯一的硬提醒在收卡门禁那一刻
+ * （issue-prerequisites 的「缺决策依据」）。结果是账被补在最后：抽查 10 张卡比对
+ * 条目数与文档修订次数，4 张整本账只写过一次。播种把提醒挪到开卡。
+ *
+ * 只播 decision-log 一份。requirements / tech-proposal 的收卡门禁查的是文档在不在，
+ * 播了等于门禁自动变绿；decision-log 查的是内容（至少一条「已定」），而骨架里那条示例
+ * 的日期写的是 `YYYY-MM-DD`，解析不出条目，所以播了也不放水。
+ *
+ * 播一条示例，不预印多条空条：条目数中位数是 4，预印十条会让一半以上的卡收盘留着六个
+ * 以上空格子，还得把「追加一条」的写入纪律改写成「找空位填」（老板 2026-09-09 裁定）。
+ */
+async function seedDecisionLogDocument(
+  dbOrTx: any,
+  issue: { id: string; companyId: string; identifier: string | null },
+): Promise<void> {
+  const skeleton = DOCUMENT_SKELETONS["decision-log"];
+  if (!skeleton) return;
+  const body = issue.identifier ? skeleton.replace(/<卡号>/g, issue.identifier) : skeleton;
+  const title = issue.identifier ? `decision-log · ${issue.identifier}` : "decision-log";
+  const now = new Date();
+  const [document] = await dbOrTx
+    .insert(documents)
+    .values({
+      companyId: issue.companyId,
+      title,
+      format: "markdown",
+      latestBody: body,
+      latestRevisionId: null,
+      latestRevisionNumber: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+  const [revision] = await dbOrTx
+    .insert(documentRevisions)
+    .values({
+      companyId: issue.companyId,
+      documentId: document.id,
+      revisionNumber: 1,
+      title,
+      format: "markdown",
+      body,
+      changeSummary: "开卡播种骨架",
+      createdAt: now,
+    })
+    .returning();
+  await dbOrTx.update(documents).set({ latestRevisionId: revision.id }).where(eq(documents.id, document.id));
+  await dbOrTx.insert(issueDocuments).values({
+    companyId: issue.companyId,
+    issueId: issue.id,
+    documentId: document.id,
+    key: "decision-log",
+    createdAt: now,
+    updatedAt: now,
+  });
+}
 
 /**
  * Resolve a `created_by_run_id` safe for the heartbeat_runs FK; returns null for
@@ -7375,6 +7436,7 @@ export function issueService(db: Db) {
         );
 
         const [issue] = await tx.insert(issues).values(values).returning();
+        await seedDecisionLogDocument(tx, issue);
         if (idempotencyKey) {
           await tx.insert(issueCreateIdempotencyKeys).values({
             companyId,

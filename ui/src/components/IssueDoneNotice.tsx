@@ -1,4 +1,5 @@
 import { History } from "lucide-react";
+import { parseDecisionLogEntries } from "@paperclipai/shared";
 
 import { InlineBanner } from "@/components/InlineBanner";
 import { useIssueDocuments } from "@/hooks/useIssueDocuments";
@@ -32,8 +33,15 @@ export function IssueDoneNotice({ issueStatus, issueId }: IssueDoneNoticeProps) 
 
   if (!isDone) return null;
 
-  const present = new Set((documents ?? []).map((doc) => doc.key));
-  const kept = MATERIAL_KEYS.filter((m) => present.has(m.key));
+  // decision-log 数条目、不数文档在不在 (MUL-590)：开卡会播种一份骨架，文档从此每张卡
+  // 都有，按存在性报就等于每张收了的卡都声称留下了决策过程。骨架里那条示例的日期写的是
+  // `YYYY-MM-DD`，解析不出条目，所以一条没填的卡自然落在门外。
+  const kept = MATERIAL_KEYS.filter((m) => {
+    const doc = (documents ?? []).find((d) => d.key === m.key);
+    if (!doc) return false;
+    if (m.key !== "decision-log") return true;
+    return parseDecisionLogEntries(doc.body ?? "").length > 0;
+  });
 
   return (
     <InlineBanner tone="info" compact icon={History} title="本 issue 为过去时">

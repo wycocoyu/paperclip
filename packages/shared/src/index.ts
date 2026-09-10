@@ -34,6 +34,7 @@ export {
   isSettledDecisionLogEntry,
   missingDecisionLogSections,
   parseDecisionLogEntries,
+  unparsedDecisionLogHeadings,
 } from "./decision-log-template.js";
 export type { DecisionLogEntry } from "./decision-log-template.js";
 export { buildSettledDecisionsSnapshot, renderSettledDecisionsDocument } from "./settled-decisions.js";
