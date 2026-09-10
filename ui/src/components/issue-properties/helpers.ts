@@ -23,8 +23,8 @@ export function defaultExecutionWorkspaceModeForProject(project: { executionWork
 
 function primaryWorkspaceIdForProject(project: Pick<Project, "primaryWorkspace" | "workspaces"> | null | undefined) {
   return project?.primaryWorkspace?.id
-    ?? project?.workspaces.find((workspace) => workspace.isPrimary)?.id
-    ?? project?.workspaces[0]?.id
+    ?? project?.workspaces?.find((workspace) => workspace.isPrimary)?.id
+    ?? project?.workspaces?.[0]?.id
     ?? null;
 }
 
