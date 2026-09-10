@@ -297,6 +297,18 @@
      with the Multica reference — fuller column,重心左移，两侧留白更小。 */
   --tc-shell-max-w: 88rem;
 
+  /* Classic task interface: the single equal-width column that carries the
+     body, the documents and the thread (user 2026-08-31 — 正文与文档同宽一列，
+     对齐 Multica). It sat at Tailwind's 3xl (48rem) while the chat shell above
+     was widened three times for the same Multica alignment, so on a wide window
+     the column used a third of the pane and the rest was dead margin
+     (user 2026-09-09). Widened to 64rem: the equal-width rule is kept, the
+     column just stops being the narrow one. It is a token rather than a literal
+     because this number is tuned by eye — one value to change, and the skeleton
+     cannot drift away from the loaded page. Tried 64rem first, eased back to
+     60rem (user 2026-09-09). */
+  --issue-col-max-w: 60rem;
+
   /* Mobile pinned-composer bottom offset (PAP-495). Default clears just the
      safe-area inset (+20px); Layout raises it to the bottom-nav height
      (--sz-calc-14) while the auto-hiding mobile nav is on screen, so the

@@ -768,7 +768,7 @@ function IssueDetailLoadingState({
       className={
         taskChatShellEnabled
           ? "mx-auto w-full max-w-(--tc-shell-max-w) space-y-6"
-          : "mx-auto w-full max-w-3xl space-y-6"
+          : "mx-auto w-full max-w-(--issue-col-max-w) space-y-6"
       }
     >
       <div className="space-y-3">
@@ -4983,11 +4983,13 @@ export function IssueDetail({
             : // Fill main exactly so the outer page never scrolls — the
               // thread's own viewport is the only scroll surface.
               "flex h-full min-h-0 w-full flex-col gap-6"
-          : // Classic: one equal-width 3xl column for everything — documents
-            // included, matching Multica (user 2026-08-31). w-full children
-            // shrink with the column when the panel takes width, so nothing
-            // overflows under it (MUL-176).
-            "mx-auto w-full max-w-3xl space-y-6"
+          : // Classic: one equal-width column for everything — documents
+            // included, matching Multica (user 2026-08-31). The width lives in
+            // --issue-col-max-w so the skeleton above cannot drift from it; it
+            // was 3xl until 2026-09-09, which left two thirds of a wide pane as
+            // dead margin. w-full children shrink with the column when the
+            // panel takes width, so nothing overflows under it (MUL-176).
+            "mx-auto w-full max-w-(--issue-col-max-w) space-y-6"
       }
     >
       {/* Parent chain breadcrumb (redesign: rendered inside the thread viewport) */}
