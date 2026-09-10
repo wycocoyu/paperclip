@@ -89,7 +89,7 @@ describe("decisionLogTemplateError", () => {
   it("names the entry number, the missing sections and the placeholder wording", () => {
     const message = decisionLogTemplateError("", HEADER + entry(3, ["我推荐", "老板采纳"]));
     expect(message).toContain("第 3 条缺「老板说」「落点」");
-    expect(message).toContain("问题 / 老板说（原话照抄）/ 我推荐 / 老板采纳 / 最终答案 / 落点");
+    expect(message).toContain("问题 / 老板说（原话照抄）/ 我推荐 / 老板采纳 / 对审意见 / 最终答案 / 落点");
     expect(message).toContain("程序当前硬校验其中四格：老板说 / 我推荐 / 老板采纳 / 落点");
     expect(message).toContain("本条老板未直接发话，由我主动记录");
   });
