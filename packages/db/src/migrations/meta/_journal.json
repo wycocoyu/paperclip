@@ -1730,6 +1730,13 @@
       "when": 1788171411885,
       "tag": "0248_issue_participant_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 249,
+      "version": "7",
+      "when": 1788171411886,
+      "tag": "0249_issue_participant_sessions_agent",
+      "breakpoints": true
     }
   ]
 }

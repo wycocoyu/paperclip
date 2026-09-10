@@ -799,6 +799,8 @@ export type IssueChanges = Record<string, IssueChangeReceiptEntry>;
 export interface IssueParticipantSession {
   issueId: string;
   sessionId: string;
+  /** 写这条的 agent；界面写入与不指认 agent 的手工补录都是 null。 */
+  agentId: string | null;
   firstSeenAt: Date;
   source: "auto" | "manual";
 }

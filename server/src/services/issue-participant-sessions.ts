@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { issueParticipantSessions } from "@paperclipai/db";
@@ -24,14 +24,22 @@ export function participantSessionIdFromRequest(req: Request): string | null {
 
 export async function recordParticipantSession(
   db: Db,
-  input: { issueId: string; sessionId: string; source?: "auto" | "manual" },
+  input: { issueId: string; sessionId: string; agentId?: string | null; source?: "auto" | "manual" },
 ): Promise<void> {
   const sessionId = input.sessionId.trim();
   if (!sessionId) return;
+  const agentId = input.agentId ?? null;
   await db
     .insert(issueParticipantSessions)
-    .values({ issueId: input.issueId, sessionId, source: input.source ?? "auto" })
-    .onConflictDoNothing();
+    .values({ issueId: input.issueId, sessionId, agentId, source: input.source ?? "auto" })
+    // 补写而不是覆盖：同一个 session 的第一次写入可能还没带上 agent（旧行、
+    // 或经由没有 agent 身份的路径），后来的写入把它补齐；已经认出来的 agent
+    // 不让后来者改名，否则一次匿名写入就能把归属抹掉。首次登记时间同理不动。
+    .onConflictDoUpdate({
+      target: [issueParticipantSessions.issueId, issueParticipantSessions.sessionId],
+      set: { agentId },
+      setWhere: sql`${issueParticipantSessions.agentId} is null`,
+    });
 }
 
 /**
@@ -47,8 +55,11 @@ export async function recordRequestParticipantSession(
 ): Promise<void> {
   const sessionId = participantSessionIdFromRequest(req);
   if (!sessionId) return;
+  // agent 不从调用点传：写请求已经被认证成某个 agent，身份就挂在 req 上，
+  // 从这里取一次，新加的登记点漏传不了。
+  const agentId = req.actor?.type === "agent" ? req.actor.agentId ?? null : null;
   try {
-    await recordParticipantSession(db, { issueId, sessionId });
+    await recordParticipantSession(db, { issueId, sessionId, agentId });
   } catch (err) {
     logger.warn({ err, issueId, sessionId }, "failed to record issue participant session");
   }
@@ -63,6 +74,7 @@ export async function listParticipantSessions(db: Db, issueId: string): Promise<
   return rows.map((row) => ({
     issueId: row.issueId,
     sessionId: row.sessionId,
+    agentId: row.agentId ?? null,
     firstSeenAt: row.firstSeenAt,
     source: row.source === "manual" ? "manual" : "auto",
   }));
