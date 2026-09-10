@@ -47,6 +47,10 @@ interface ApiClientOptions {
   apiBase: string;
   apiKey?: string;
   runId?: string;
+  /** 参与的 session (MUL-591): travels on every request so the server can
+   *  register the terminal that wrote, without four call sites each
+   *  remembering to pass it. */
+  sessionId?: string;
   recoverAuth?: (input: RecoverAuthInput) => Promise<string | null>;
 }
 
@@ -54,12 +58,14 @@ export class PaperclipApiClient {
   readonly apiBase: string;
   apiKey?: string;
   readonly runId?: string;
+  readonly sessionId?: string;
   readonly recoverAuth?: (input: RecoverAuthInput) => Promise<string | null>;
 
   constructor(opts: ApiClientOptions) {
     this.apiBase = opts.apiBase.replace(/\/+$/, "");
     this.apiKey = opts.apiKey?.trim() || undefined;
     this.runId = opts.runId?.trim() || undefined;
+    this.sessionId = opts.sessionId?.trim() || undefined;
     this.recoverAuth = opts.recoverAuth;
   }
 
@@ -133,6 +139,13 @@ export class PaperclipApiClient {
 
     if (this.runId) {
       headers["x-paperclip-run-id"] = this.runId;
+    }
+
+    // A harness that publishes no session id is normal (and reads carry the
+    // header for nothing), so a missing value is silently no header rather
+    // than an error: nothing here is worth failing a write over.
+    if (this.sessionId) {
+      headers["x-paperclip-session"] = this.sessionId;
     }
 
     let response: Response;

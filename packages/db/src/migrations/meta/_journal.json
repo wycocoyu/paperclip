@@ -1723,6 +1723,13 @@
       "when": 1788171411884,
       "tag": "0247_team_doc_fanout_delivered_locator",
       "breakpoints": true
+    },
+    {
+      "idx": 248,
+      "version": "7",
+      "when": 1788171411885,
+      "tag": "0248_issue_participant_sessions",
+      "breakpoints": true
     }
   ]
 }

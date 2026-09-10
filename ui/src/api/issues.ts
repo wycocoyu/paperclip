@@ -15,6 +15,7 @@ import type {
   IssueComment,
   IssueDocument,
   IssueLabel,
+  IssueParticipantSession,
   IssueRecoveryAction,
   IssueRetryNowResponse,
   StalledReviewDecision,
@@ -328,6 +329,14 @@ export const issuesApi = {
     api.post<IssueDocument>(`/issues/${id}/documents/${encodeURIComponent(key)}/revisions/${revisionId}/restore`, {}),
   deleteDocument: (id: string, key: string) =>
     api.delete<{ ok: true }>(`/issues/${id}/documents/${encodeURIComponent(key)}`),
+  listParticipantSessions: (id: string) =>
+    api.get<IssueParticipantSession[]>(`/issues/${id}/participant-sessions`),
+  addParticipantSession: (id: string, sessionId: string) =>
+    api.post<IssueParticipantSession[]>(`/issues/${id}/participant-sessions`, { sessionId }),
+  removeParticipantSession: (id: string, sessionId: string) =>
+    api.delete<{ id: string; removed: boolean }>(
+      `/issues/${id}/participant-sessions/${encodeURIComponent(sessionId)}`,
+    ),
   listAttachments: (id: string) => api.get<IssueAttachment[]>(`/issues/${id}/attachments`),
   uploadAttachment: (
     companyId: string,

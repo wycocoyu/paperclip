@@ -2570,6 +2570,36 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: "get",
+  path: "/api/issues/{id}/participant-sessions",
+  tags: ["issues"],
+  summary: "List sessions that wrote on an issue",
+  request: { params: z.object({ id: z.string() }) },
+  responses: { 200: r.ok(), 401: r.unauthorized, 404: r.notFound },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/issues/{id}/participant-sessions",
+  tags: ["issues"],
+  summary: "Add a participant session by hand",
+  request: {
+    params: z.object({ id: z.string() }),
+    body: jsonBody(z.object({ sessionId: z.string().min(1).max(200) })),
+  },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/api/issues/{id}/participant-sessions/{sessionId}",
+  tags: ["issues"],
+  summary: "Remove a participant session",
+  request: { params: z.object({ id: z.string(), sessionId: z.string() }) },
+  responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
+});
+
+registry.registerPath({
   method: "post",
   path: "/api/issues/{id}/inbox-archive",
   tags: ["issues"],

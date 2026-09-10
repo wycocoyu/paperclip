@@ -19,6 +19,7 @@ import { attentionService } from "../services/attention.js";
 import { authorizationDeniedDetails, authorizationService } from "../services/authorization.js";
 import { canReadDecisionSource } from "../services/decision-queues.js";
 import { loadIssueClaimState, unclaimedDeliverableDenial } from "../services/issue-claim-gate.js";
+import { recordRequestParticipantSession } from "../services/issue-participant-sessions.js";
 import { hashAttentionArchiveManifest } from "../services/decision-retention.js";
 import { forbidden, unprocessable } from "../errors.js";
 
@@ -238,7 +239,10 @@ export function decisionRoutes(db: Db, options: DecisionServiceOptions) {
       // taking the card. Board callers below are exempt — they are already
       // accountable to a person.
       if (await denyUnclaimedDecision(req, res, companyId, body.originIssueId)) return;
-      res.status(201).json(await svc.create({ companyId, actor: req.actor, ...agent, ...body }));
+      const created = await svc.create({ companyId, actor: req.actor, ...agent, ...body });
+      // 开决策算参与，登记挂在来源卡上；没有来源卡的决策没有卡可登记。
+      if (body.originIssueId) await recordRequestParticipantSession(db, req, body.originIssueId);
+      res.status(201).json(created);
       return;
     }
     if (!createdByAgentId) {
@@ -251,7 +255,9 @@ export function decisionRoutes(db: Db, options: DecisionServiceOptions) {
     // The board owns the call, the named agent owns the record: the decision is
     // filed under that agent with no run, so provenance falls back to
     // originIssueId — which the service requires on this path.
-    res.status(201).json(await svc.create({ companyId, actor: req.actor, agentId: originAgentId, runId: null, ...body }));
+    const createdOnBehalf = await svc.create({ companyId, actor: req.actor, agentId: originAgentId, runId: null, ...body });
+    if (body.originIssueId) await recordRequestParticipantSession(db, req, body.originIssueId);
+    res.status(201).json(createdOnBehalf);
   });
   router.post("/companies/:companyId/decision-bundles", validate(bundleSchema), async (req, res) => {
     const companyId = req.params.companyId as string; assertCompanyAccess(req, companyId);

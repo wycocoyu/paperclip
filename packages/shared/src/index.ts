@@ -1030,6 +1030,7 @@ export type {
   IssueBlockedInboxState,
   IssueProductivityReview,
   IssueProductivityReviewTrigger,
+  IssueParticipantSession,
   IssueRecoveryAction,
   IssueWatchdog,
   IssueWatchdogStatus,
