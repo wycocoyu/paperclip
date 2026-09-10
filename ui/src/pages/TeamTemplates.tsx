@@ -34,8 +34,8 @@ const TEMPLATES: Template[] = [
     id: "decision-log",
     name: "decision-log · 决策流水账",
     when: "每拍一次板追加一条。讨论当轮就写，不攒到开工。",
-    source: "paperclipai issue document:get <卡号> decision-log（这个键还不存在时直接吐骨架）",
-    enforced: `六格是模板要求，程序硬校验其中四格：${REQUIRED_DECISION_LOG_SECTIONS.map((s) => `「${s}」`).join("")}。缺格时 CLI 抛错、服务端 422。`,
+    source: "开卡就播种一份（MUL-590）；老卡没有的，paperclipai issue document:get <卡号> decision-log 也会吐骨架",
+    enforced: `七格是模板要求，程序硬校验其中四格：${REQUIRED_DECISION_LOG_SECTIONS.map((s) => `「${s}」`).join("")}。缺格时 CLI 抛错、服务端 422。「对审意见」不在硬校验里，但每条都要写，没送审就写「未审」。`,
     body: DOCUMENT_SKELETONS["decision-log"] ?? "",
   },
   {

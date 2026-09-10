@@ -36,8 +36,12 @@ export type SettledDecisionsSnapshot = {
   rows: SettledDecisionRow[];
 };
 
-/** 六格全认：硬校验只管四格，但划格与格的边界要认全六个，否则正文里的加粗句会被当成下一格。 */
-const ALL_DECISION_LOG_SECTIONS = ["问题", "最终答案", ...REQUIRED_DECISION_LOG_SECTIONS];
+/**
+ * 划格边界要认全七个格名，不只硬校验那四个，否则正文里的加粗句会被当成下一格。
+ * 新加的格必须登记进来 (MUL-593)，否则排在它前面那一格会一路吃到再下一个已知格名，
+ * 把新格的内容并进自己的正文里。
+ */
+const ALL_DECISION_LOG_SECTIONS = ["问题", "对审意见", "最终答案", ...REQUIRED_DECISION_LOG_SECTIONS];
 
 /**
  * 先提完整加粗标签再比，不能只比前缀：`**问题不在内容，在触发时机。**` 是正文不是标题，
