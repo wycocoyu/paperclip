@@ -7800,10 +7800,13 @@ export function issueService(db: Db) {
       delete (issueData as { autoDispatchPaused?: boolean }).autoDispatchPaused;
       delete (patch as { autoDispatchPaused?: boolean }).autoDispatchPaused;
       if (autoDispatchPausedInput !== undefined) {
-        patch.executionPolicy = {
+        // Normalize on the way out: a card with no policy yet would otherwise
+        // be written as a bare `{ autoDispatchPaused }` with no `stages`, and
+        // the UI reads `policy.stages` unguarded.
+        patch.executionPolicy = normalizeIssueExecutionPolicy({
           ...parseObject(issueData.executionPolicy ?? existing.executionPolicy),
           autoDispatchPaused: autoDispatchPausedInput,
-        };
+        }) as Record<string, unknown> | null;
       }
       // MUL-538: reopening a finished card pauses its auto-dispatch. An
       // assignment in Paperclip is standing state and the status is the gate,
@@ -7820,10 +7823,10 @@ export function issueService(db: Db) {
         toStatus: issueData.status,
         explicitPause: autoDispatchPausedInput ?? readAutoDispatchPausedInput(issueData.executionPolicy),
       })) {
-        patch.executionPolicy = {
+        patch.executionPolicy = normalizeIssueExecutionPolicy({
           ...parseObject(issueData.executionPolicy ?? existing.executionPolicy),
           autoDispatchPaused: true,
-        };
+        }) as Record<string, unknown> | null;
       }
       if (issueData.requestDepth !== undefined) {
         patch.requestDepth = clampIssueRequestDepth(issueData.requestDepth);
