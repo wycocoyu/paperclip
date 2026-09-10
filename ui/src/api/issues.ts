@@ -331,8 +331,8 @@ export const issuesApi = {
     api.delete<{ ok: true }>(`/issues/${id}/documents/${encodeURIComponent(key)}`),
   listParticipantSessions: (id: string) =>
     api.get<IssueParticipantSession[]>(`/issues/${id}/participant-sessions`),
-  addParticipantSession: (id: string, sessionId: string) =>
-    api.post<IssueParticipantSession[]>(`/issues/${id}/participant-sessions`, { sessionId }),
+  addParticipantSession: (id: string, input: { sessionId: string; agentId: string | null }) =>
+    api.post<IssueParticipantSession[]>(`/issues/${id}/participant-sessions`, input),
   removeParticipantSession: (id: string, sessionId: string) =>
     api.delete<{ id: string; removed: boolean }>(
       `/issues/${id}/participant-sessions/${encodeURIComponent(sessionId)}`,
