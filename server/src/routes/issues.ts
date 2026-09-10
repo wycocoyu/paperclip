@@ -197,6 +197,12 @@ import { feedbackService } from "../services/feedback.js";
 import { noteUnregisteredBranch, recordRetroGate } from "../services/retro-gate.js";
 import { missingIssueClosePrerequisites, issuePreflight, type IssuePreflightActor } from "../services/issue-prerequisites.js";
 import { unclaimedDeliverableDenial, type ClaimGateDeliverable } from "../services/issue-claim-gate.js";
+import {
+  listParticipantSessions,
+  recordParticipantSession,
+  recordRequestParticipantSession,
+  removeParticipantSession,
+} from "../services/issue-participant-sessions.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import {
   ISSUE_BLOCKER_DIAGNOSTICS_MAX_BLOCKERS,
@@ -7853,6 +7859,8 @@ export function issueRoutes(
       documentChanged: true,
     });
 
+    await recordRequestParticipantSession(db, req, issue.id);
+
     res.status(result.created ? 201 : 200).json(doc);
   });
 
@@ -8603,6 +8611,48 @@ export function issueRoutes(
       details: { userId: req.actor.userId },
     });
     res.json({ id: issue.id, removed });
+  });
+
+  // 参与的 session (MUL-591)。自动登记挂在四条写路径上（见
+  // issue-participant-sessions 服务）；这三个端点是列表与手工补录，补的是
+  // 机器看不见的参与，所以只有人（board）能加，加出来的行标成 manual。
+  router.get("/issues/:id/participant-sessions", async (req, res) => {
+    const id = req.params.id as string;
+    const issue = await getAccessibleResource(req, res, svc.getById(id), "Issue not found");
+    if (!issue) return;
+    res.json(await listParticipantSessions(db, issue.id));
+  });
+
+  router.post(
+    "/issues/:id/participant-sessions",
+    validate(z.object({ sessionId: z.string().trim().min(1).max(200) })),
+    async (req, res) => {
+      const id = req.params.id as string;
+      const issue = await getAccessibleResource(req, res, svc.getById(id), "Issue not found");
+      if (!issue) return;
+      if (req.actor.type !== "board") {
+        res.status(403).json({ error: "Board authentication required" });
+        return;
+      }
+      await recordParticipantSession(db, {
+        issueId: issue.id,
+        sessionId: req.body.sessionId,
+        source: "manual",
+      });
+      res.json(await listParticipantSessions(db, issue.id));
+    },
+  );
+
+  router.delete("/issues/:id/participant-sessions/:sessionId", async (req, res) => {
+    const id = req.params.id as string;
+    const issue = await getAccessibleResource(req, res, svc.getById(id), "Issue not found");
+    if (!issue) return;
+    if (req.actor.type !== "board") {
+      res.status(403).json({ error: "Board authentication required" });
+      return;
+    }
+    const removedSession = await removeParticipantSession(db, issue.id, String(req.params.sessionId ?? ""));
+    res.json({ id: issue.id, removed: removedSession });
   });
 
   async function resolveInboxArchiveTarget(
@@ -11340,6 +11390,9 @@ export function issueRoutes(
     })();
 
     await queueTaskWatchdogEvaluation(issue, actor.runId);
+    // 只有推状态算参与：PATCH 也承载指派、优先级这类不是「在这张卡上干活」
+    // 的改动，跟着它们一起登记会把列表灌满路过的会话。
+    if (req.body.status != null) await recordRequestParticipantSession(db, req, issue.id);
     const changes = issueResponse.changes ?? {};
     if (prefersMinimalIssueUpdateResponse(req)) {
       res.setHeader("Preference-Applied", "return=minimal");
@@ -13360,6 +13413,7 @@ export function issueRoutes(
     })();
 
     await queueTaskWatchdogEvaluation(currentIssue, actor.runId);
+    await recordRequestParticipantSession(db, req, currentIssue.id);
     res.status(201).json(comment);
   });
 

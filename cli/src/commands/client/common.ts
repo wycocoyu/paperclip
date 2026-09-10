@@ -94,6 +94,7 @@ export function resolveCommandContext(
     apiBase,
     apiKey,
     runId,
+    sessionId: resolveSessionId().sessionId ?? undefined,
     recoverAuth: explicitApiKey || !canAttemptInteractiveBoardAuth()
       ? undefined
       : async ({ error }) => {

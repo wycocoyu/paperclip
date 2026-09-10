@@ -790,6 +790,19 @@ export interface IssueChangeReceiptEntry {
 
 export type IssueChanges = Record<string, IssueChangeReceiptEntry>;
 
+/**
+ * 参与的 session (MUL-591)：对这张卡写过东西的终端会话，一行一个。
+ *
+ * `manual` 的行是人手补的，补的是机器看不见的参与（只在别处讨论过这张卡、
+ * 没在卡上留下写入的 session），所以来源要一直带着，读的人有权分辨。
+ */
+export interface IssueParticipantSession {
+  issueId: string;
+  sessionId: string;
+  firstSeenAt: Date;
+  source: "auto" | "manual";
+}
+
 export interface Issue {
   id: string;
   companyId: string;

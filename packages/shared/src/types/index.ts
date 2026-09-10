@@ -644,6 +644,7 @@ export type {
   IssueBlockedInboxSeverity,
   IssueBlockedInboxState,
   IssueProductivityReview,
+  IssueParticipantSession,
   IssueProductivityReviewTrigger,
   IssueRecoveryAction,
   SuccessfulRunHandoffState,
