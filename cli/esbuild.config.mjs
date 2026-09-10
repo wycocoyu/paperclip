@@ -66,6 +66,24 @@ if (bundledCliNpmDependencies.has("embedded-postgres")) {
   }
 }
 
+/** 构建时的 HEAD。读 .git 而不是 fork 一个 git 进程，构建脚本不该依赖 PATH 里有 git。 */
+function buildSha() {
+  try {
+    const head = readFileSync(resolve(repoRoot, ".git/HEAD"), "utf8").trim();
+    if (!head.startsWith("ref:")) return head || "unknown";
+    const ref = head.slice(4).trim();
+    try {
+      return readFileSync(resolve(repoRoot, ".git", ref), "utf8").trim() || "unknown";
+    } catch {
+      const packed = readFileSync(resolve(repoRoot, ".git/packed-refs"), "utf8");
+      const line = packed.split("\n").find((l) => l.endsWith(` ${ref}`));
+      return line?.split(" ")[0]?.trim() ?? "unknown";
+    }
+  } catch {
+    return "unknown";
+  }
+}
+
 /** @type {import('esbuild').BuildOptions} */
 export default {
   entryPoints: ["src/index.ts"],
@@ -75,6 +93,9 @@ export default {
   format: "esm",
   outfile: "dist/index.js",
   banner: { js: "#!/usr/bin/env node" },
+  // 包里刻上它是哪次提交打的，运行时拿来跟当前 HEAD 比（bundle-freshness.ts）。
+  // 拿不到就写 unknown，检查随之关闭——从 tar 包解出来构建时没有 .git 是正常的。
+  define: { __PAPERCLIP_BUILD_SHA__: JSON.stringify(buildSha()) },
   external: [...externals].sort(),
   treeShaking: true,
   sourcemap: true,
