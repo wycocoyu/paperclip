@@ -257,6 +257,46 @@ describe("issue subresource commands", () => {
   });
 });
 
+describe("work-product:create · 飞书 wiki 通路创建前校验（MUL-603）", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.PAPERCLIP_API_KEY;
+    delete process.env.PAPERCLIP_API_URL;
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("lark-cli 查不到时拒绝创建，不发 POST", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    // 清空 PATH 让 lark-cli 必然 ENOENT——校验必须拒绝创建而不是静默放行。
+    const originalPath = process.env.PATH;
+    process.env.PATH = "";
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("process.exit");
+    }) as never);
+    try {
+      await expect(run([
+        "issue", "work-product:create", ISSUE_ID,
+        "--payload-json", JSON.stringify({
+          type: "document",
+          provider: "feishu",
+          title: "MUL-603 需求与方案",
+          url: "https://hellotalk.feishu.cn/wiki/Nn3ew8cFhiIlk6kBNkkcBgMYnTe",
+        }),
+      ])).rejects.toThrow("process.exit");
+    } finally {
+      process.env.PATH = originalPath;
+      exit.mockRestore();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 function jsonResponse(body: unknown = { ok: true }, init: ResponseInit = { status: 200 }): Response {
   return new Response(JSON.stringify(body), init);
 }

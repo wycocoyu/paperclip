@@ -528,6 +528,10 @@ export {
 
 export {
   createIssueWorkProductSchema,
+  FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN,
+  FEISHU_ISSUE_WIKI_URL_PREFIX,
+  isFeishuIssueWikiDoc,
+  isFeishuIssueWikiLink,
   issueWorkProductMetadataSchema,
   updateIssueWorkProductSchema,
   attachmentArtifactWorkProductMetadataSchema,

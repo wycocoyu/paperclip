@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Db } from "@paperclipai/db";
+import { FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN, FEISHU_ISSUE_WIKI_URL_PREFIX } from "@paperclipai/shared";
 import { missingIssueClosePrerequisites } from "./issue-prerequisites.js";
 
 /**
@@ -12,18 +13,22 @@ import { missingIssueClosePrerequisites } from "./issue-prerequisites.js";
  */
 
 type DocRow = { key: string; body: string | null };
+type WorkProductRow = { type: string; url: string | null; metadata: unknown };
 
-function makeDb(docs: DocRow[], decidedDecision = true) {
+function makeDb(docs: DocRow[], decidedDecision = true, workProducts: WorkProductRow[] = []) {
   let call = 0;
-  // 既可 await 也可 .limit(1)（docs 查询直接 await，decisions 查询链尾有 .limit）
+  // 既可 await 也可 .limit(1)（docs / work-products 查询直接 await，decisions 查询链尾有 .limit）
   const queryResult = (rows: unknown[]) => ({
     then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
       Promise.resolve(rows).then(res, rej),
     limit: async () => rows,
   });
+  // 调用顺序 = 实现里的查询顺序：文档 → work products（MUL-603 wiki 通路）→ 决策
   const where = () => {
     call += 1;
-    return queryResult(call === 1 ? docs : decidedDecision ? [{ id: "decision-1" }] : []);
+    if (call === 1) return queryResult(docs);
+    if (call === 2) return queryResult(workProducts);
+    return queryResult(decidedDecision ? [{ id: "decision-1" }] : []);
   };
   const db = {
     select: () => ({
@@ -132,5 +137,73 @@ describe("missingIssueClosePrerequisites · 门禁 B：基线对比（MUL-558）
   it("无 baseline 的卡不受限（opt-in）", async () => {
     const missing = await missingIssueClosePrerequisites(makeDb(BASE_DOCS), "co", issue());
     expect(missing).toEqual([]);
+  });
+});
+
+describe("missingIssueClosePrerequisites · 飞书 wiki 通路（MUL-603）", () => {
+  const wikiDoc = (overrides: Partial<WorkProductRow> = {}): WorkProductRow => ({
+    type: "document",
+    url: `${FEISHU_ISSUE_WIKI_URL_PREFIX}Nn3ew8cFhiIlk6kBNkkcBgMYnTe`,
+    metadata: { parentNodeToken: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN },
+    ...overrides,
+  });
+  const onlyDecisionLog = BASE_DOCS.filter((d) => d.key === "decision-log");
+
+  it("卡内两份文档都没有，但挂了合规 wiki 链接 → 放行", async () => {
+    const missing = await missingIssueClosePrerequisites(
+      makeDb(onlyDecisionLog, true, [wikiDoc()]),
+      "co",
+      issue(),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("wiki 链接的 parentNodeToken 不是固定页 → 不认，仍按老路拦", async () => {
+    const missing = await missingIssueClosePrerequisites(
+      makeDb(onlyDecisionLog, true, [wikiDoc({ metadata: { parentNodeToken: "SomeOtherNodeToken" } })]),
+      "co",
+      issue(),
+    );
+    expect(missing.some((m) => m.includes("需求设计"))).toBe(true);
+  });
+
+  it("飞书链接但不在 wiki 路径下 → 不认", async () => {
+    const missing = await missingIssueClosePrerequisites(
+      makeDb(onlyDecisionLog, true, [wikiDoc({ url: "https://hellotalk.feishu.cn/docx/X5QLd6TnRoJEX2xfeVYcIVLjnZg" })]),
+      "co",
+      issue(),
+    );
+    expect(missing.some((m) => m.includes("需求设计"))).toBe(true);
+  });
+
+  it("两条路都不满足时，报错同时给出卡内文档与 wiki 两种修法", async () => {
+    const missing = await missingIssueClosePrerequisites(makeDb(onlyDecisionLog), "co", issue());
+    expect(missing.some((m) => m.includes("document:put"))).toBe(true);
+    expect(missing.some((m) => m.includes("work-product:create") && m.includes(FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN))).toBe(true);
+  });
+
+  it("走 wiki 通路的代码卡不再判门禁 A（验证证据在 CLI 侧校验）", async () => {
+    const docs = [
+      ...onlyDecisionLog,
+      { key: "tech-proposal", body: "# 方案，无验证无代码块" },
+    ];
+    const missing = await missingIssueClosePrerequisites(
+      makeDb(docs, true, [wikiDoc()]),
+      "co",
+      issue({ workingBranch: "feature/wy/MUL-603/gate-wiki-link" }),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("没有 wiki 链接的代码卡，门禁 A 照旧生效", async () => {
+    const docs = BASE_DOCS.map((d) =>
+      d.key === "tech-proposal" ? { key: d.key, body: "# 方案，无验证无代码块" } : d,
+    );
+    const missing = await missingIssueClosePrerequisites(
+      makeDb(docs, true, []),
+      "co",
+      issue({ workingBranch: "feature/wy/MUL-603/gate-wiki-link" }),
+    );
+    expect(missing.some((m) => m.includes("验证证据"))).toBe(true);
   });
 });

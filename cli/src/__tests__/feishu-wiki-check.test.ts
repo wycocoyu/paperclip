@@ -1,0 +1,145 @@
+import { describe, expect, it, vi } from "vitest";
+import { FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN, FEISHU_ISSUE_WIKI_URL_PREFIX } from "@paperclipai/shared";
+import { assertFeishuIssueWikiWorkProduct, type LarkCliRunner } from "../commands/client/feishu-wiki-check.js";
+
+/**
+ * MUL-603 CLI 侧红绿：飞书 wiki 通路的 work product 创建前三问——节点挂在固定页下、
+ * 目录里有技术方案页、那页正文有验证证据。判据与服务端门禁 A 逐字相同。
+ */
+
+const NODE_TOKEN = "Nn3ew8cFhiIlk6kBNkkcBgMYnTe";
+const URL = `${FEISHU_ISSUE_WIKI_URL_PREFIX}${NODE_TOKEN}`;
+const SPACE_ID = "7651814251744562371";
+const TECH_OBJ_TOKEN = "BhLxdcWzFoe7e3xorgMcQoegnue";
+
+const GOOD_BODY = "# 技术方案\n\n## 验证方式\n\n```\npnpm test\n# 17 passed\n```";
+
+type Stubs = {
+  node?: unknown;
+  nodes?: unknown[];
+  content?: string;
+};
+
+function makeRunner(stubs: Stubs = {}): LarkCliRunner & { calls: string[][] } {
+  const calls: string[][] = [];
+  const runner = (async (_file: string, args: string[]) => {
+    calls.push(args);
+    if (args[1] === "+node-get") {
+      return { stdout: JSON.stringify({ ok: true, data: stubs.node ?? {
+        node_token: NODE_TOKEN,
+        obj_token: "V6B1dIQaOoEkkTxtI93cVOYAnhm",
+        parent_node_token: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN,
+        space_id: SPACE_ID,
+        title: "MUL-603 收卡门禁认飞书 wiki 链接",
+      } }), stderr: "" };
+    }
+    if (args[1] === "+node-list") {
+      return { stdout: JSON.stringify({ ok: true, data: { nodes: stubs.nodes ?? [
+        { node_token: "c1", obj_token: "o1", title: "需求设计" },
+        { node_token: "c2", obj_token: TECH_OBJ_TOKEN, title: "技术方案" },
+      ] } }), stderr: "" };
+    }
+    if (args[1] === "+fetch") {
+      return { stdout: JSON.stringify({ ok: true, data: { document: { content: stubs.content ?? GOOD_BODY } } }), stderr: "" };
+    }
+    throw new Error(`unexpected lark-cli call: ${args.join(" ")}`);
+  }) as LarkCliRunner & { calls: string[][] };
+  runner.calls = calls;
+  return runner;
+}
+
+describe("assertFeishuIssueWikiWorkProduct · MUL-603", () => {
+  it("非 wiki 通路的 payload 一个命令都不跑", async () => {
+    const runner = makeRunner();
+    await assertFeishuIssueWikiWorkProduct(
+      { type: "pull_request", url: "https://example.com/pr/1" },
+      runner,
+    );
+    await assertFeishuIssueWikiWorkProduct(
+      { type: "document", url: "https://hellotalk.feishu.cn/docx/X5QLd6TnRoJEX2xfeVYcIVLjnZg" },
+      runner,
+    );
+    expect(runner.calls).toEqual([]);
+  });
+
+  it("三问全过 → 放行，且技术方案页按 markdown 格式取（xml 里没有 ``` 围栏）", async () => {
+    const runner = makeRunner();
+    await expect(assertFeishuIssueWikiWorkProduct({ type: "document", url: URL }, runner)).resolves.toBeUndefined();
+    expect(runner.calls.map((c) => c.slice(0, 2))).toEqual([
+      ["wiki", "+node-get"],
+      ["wiki", "+node-list"],
+      ["docs", "+fetch"],
+    ]);
+    expect(runner.calls[2]).toContain("--doc-format");
+    expect(runner.calls[2]).toContain("markdown");
+    expect(runner.calls[2]).toContain(TECH_OBJ_TOKEN);
+  });
+
+  it("父节点不是固定页 → 拒绝创建并点名固定页 token", async () => {
+    const runner = makeRunner({ node: {
+      node_token: NODE_TOKEN, space_id: SPACE_ID, parent_node_token: "SomeOtherParent", title: "乱放的目录",
+    } });
+    await expect(assertFeishuIssueWikiWorkProduct({ type: "document", url: URL }, runner))
+      .rejects.toThrow(FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN);
+  });
+
+  it("目录下没有技术方案子页 → 拒绝并列出现有子页", async () => {
+    const runner = makeRunner({ nodes: [{ node_token: "c1", obj_token: "o1", title: "需求设计" }] });
+    await expect(assertFeishuIssueWikiWorkProduct({ type: "document", url: URL }, runner))
+      .rejects.toThrow(/技术方案.*需求设计/s);
+  });
+
+  it("技术方案页无代码块 → 拒绝（判据与服务端门禁 A 相同）", async () => {
+    const runner = makeRunner({ content: "# 技术方案\n\n## 验证方式\n\n跑一遍测试。" });
+    await expect(assertFeishuIssueWikiWorkProduct({ type: "document", url: URL }, runner))
+      .rejects.toThrow("缺验证证据");
+  });
+
+  it("技术方案页无「验证」字样 → 拒绝", async () => {
+    const runner = makeRunner({ content: "# 技术方案\n\n```\npnpm test\n```" });
+    await expect(assertFeishuIssueWikiWorkProduct({ type: "document", url: URL }, runner))
+      .rejects.toThrow("缺验证证据");
+  });
+
+  it("lark-cli 不在 PATH → 拒绝创建并给安装指引，不静默放行", async () => {
+    const runner = vi.fn(async () => {
+      const err = new Error("spawn lark-cli ENOENT") as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      throw err;
+    }) as unknown as LarkCliRunner;
+    await expect(assertFeishuIssueWikiWorkProduct({ type: "document", url: URL }, runner))
+      .rejects.toThrow(/lark-cli.*不在 PATH/s);
+  });
+
+  it("lark-cli 返回 ok:false → 拒绝创建", async () => {
+    const runner = (async () => ({ stdout: JSON.stringify({ ok: false, error: { msg: "permission denied" } }), stderr: "" })) as LarkCliRunner;
+    await expect(assertFeishuIssueWikiWorkProduct({ type: "document", url: URL }, runner))
+      .rejects.toThrow("permission denied");
+  });
+
+  it("payload 缺 metadata.parentNodeToken → 按真实父节点补上，否则服务端门禁认不出这条链接", async () => {
+    const runner = makeRunner();
+    const payload: { type: string; url: string; metadata?: Record<string, unknown> | null } = { type: "document", url: URL };
+    await assertFeishuIssueWikiWorkProduct(payload, runner);
+    expect(payload.metadata?.parentNodeToken).toBe(FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN);
+  });
+
+  it("metadata.parentNodeToken 跟飞书真实父节点对不上 → 拒绝，不静默改写调用方的值", async () => {
+    const runner = makeRunner();
+    const payload = { type: "document", url: URL, metadata: { parentNodeToken: "WRONGtoken0000000000000000" } };
+    await expect(assertFeishuIssueWikiWorkProduct(payload, runner))
+      .rejects.toThrow("服务端门禁认的是 metadata 这个声明");
+    expect(payload.metadata.parentNodeToken).toBe("WRONGtoken0000000000000000");
+  });
+
+  it("已填对的 metadata 原样保留，其余字段不丢", async () => {
+    const runner = makeRunner();
+    const payload = {
+      type: "document",
+      url: URL,
+      metadata: { parentNodeToken: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN, spaceId: SPACE_ID },
+    };
+    await assertFeishuIssueWikiWorkProduct(payload, runner);
+    expect(payload.metadata).toEqual({ parentNodeToken: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN, spaceId: SPACE_ID });
+  });
+});

@@ -57,6 +57,7 @@ import {
 import { sessionLocatorForSlug } from "@paperclipai/shared/session-locator";
 import { displayModelName } from "@paperclipai/shared/model-signature";
 import { readLocalModelSignature } from "./local-model.js";
+import { assertFeishuIssueWikiWorkProduct } from "./feishu-wiki-check.js";
 import {
   buildFeedbackTraceQuery,
   normalizeFeedbackTraceExportFormat,
@@ -1413,6 +1414,8 @@ function openSpecLinkRows(rows: unknown): Array<{ id: string; title: string; sto
         try {
           const ctx = resolveCommandContext(opts);
           const payload = createIssueWorkProductSchema.parse(parseJson(opts.payloadJson));
+          // MUL-603：飞书 wiki 通路的链接创建时就验真——服务端收卡门禁看不见飞书正文。
+          await assertFeishuIssueWikiWorkProduct(payload);
           const product = await ctx.api.post(apiPath`/api/issues/${issueId}/work-products`, payload);
           printOutput(product, { json: ctx.json });
         } catch (err) {

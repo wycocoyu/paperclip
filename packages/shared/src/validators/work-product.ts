@@ -104,3 +104,26 @@ export const updateIssueWorkProductSchema = objectWithoutDefaults(
 ).partial();
 
 export type UpdateIssueWorkProduct = z.infer<typeof updateIssueWorkProductSchema>;
+
+/**
+ * 飞书知识库固定页「需求 issue 区」的 wiki 节点 token（MUL-603）。
+ * 需求设计与技术方案从卡内 document 搬到飞书后，收卡门禁认这一页下面的
+ * 子目录链接；别处的飞书文档不算，免得随手贴一条链接就绕开门禁。
+ */
+export const FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN = "TeMgwN6HiiNnR3k7ohtcWiqInMg";
+
+export const FEISHU_ISSUE_WIKI_URL_PREFIX = "https://hellotalk.feishu.cn/wiki/";
+
+/** 看起来是 issue 区 wiki 链接——CLI 侧真伪校验的触发条件，只看 type 与 URL 前缀。 */
+export function isFeishuIssueWikiLink(input: { type?: string | null; url?: string | null }): boolean {
+  return input.type === "document" && (input.url ?? "").startsWith(FEISHU_ISSUE_WIKI_URL_PREFIX);
+}
+
+/** 收卡门禁认的 wiki 通路：链接对，且 metadata 声明挂在固定页下（真伪由 CLI 侧创建时校验）。 */
+export function isFeishuIssueWikiDoc(
+  input: { type?: string | null; url?: string | null; metadata?: unknown },
+): boolean {
+  if (!isFeishuIssueWikiLink(input)) return false;
+  const parent = (input.metadata as { parentNodeToken?: unknown } | null | undefined)?.parentNodeToken;
+  return parent === FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN;
+}
