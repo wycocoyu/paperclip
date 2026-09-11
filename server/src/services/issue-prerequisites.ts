@@ -1,12 +1,20 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { decisions, documents, issueDocuments } from "@paperclipai/db";
-import { isSettledDecisionLogEntry, parseDecisionLogEntries } from "@paperclipai/shared";
+import { decisions, documents, issueDocuments, issueWorkProducts } from "@paperclipai/db";
+import {
+  FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN,
+  FEISHU_ISSUE_WIKI_URL_PREFIX,
+  isFeishuIssueWikiDoc,
+  isSettledDecisionLogEntry,
+  parseDecisionLogEntries,
+} from "@paperclipai/shared";
 
 /**
  * The close-out prerequisite check (MUL-137, 老板令 2026-08-28).
  *
- * 一个 issue 必须起码有需求设计、技术方案，以及决策依据。决策依据二选一
+ * 一个 issue 必须起码有需求设计、技术方案，以及决策依据。需求设计与技术方案
+ * 二选一（MUL-603，老板令 2026-09-11）：卡内 requirements + tech-proposal 两份
+ * 文档，或卡上挂着飞书知识库「需求 issue 区」固定页下的本卡子目录链接。决策依据二选一
  * （MUL-465 放宽，老板令 2026-09-01）：decision-log 文档至少一条「已定」条目，
  * 或一张 decided 状态的关联决策卡——决策卡降级后，亲审场景只记 decision-log，
  * 不再强制开卡。That rule started as the MUL-37 convention (documents keyed
@@ -57,17 +65,41 @@ export async function missingIssueClosePrerequisites(
       inArray(issueDocuments.key, ["requirements", "tech-proposal", "decision-log", "test-baseline", "test-result"]),
     ));
   const keys = new Set(docRows.map((row) => row.key));
-  if (!keys.has("requirements")) {
-    missing.push("缺「需求设计」文档——issue document:put <卡> requirements --body-file 需求设计.md");
-  }
-  if (!keys.has("tech-proposal")) {
-    missing.push("缺「技术方案」文档——issue document:put <卡> tech-proposal --body-file 方案.md");
+
+  // MUL-603：需求设计与技术方案搬去了飞书知识库。走 wiki 通路时正文在飞书，
+  // 服务端读不到，验证证据改由 CLI 在 work-product:create 那一刻校验
+  // （见 cli/src/commands/client/feishu-wiki-check.ts）。
+  //
+  // 规则上新卡只有 wiki 一条路（老板令 2026-09-11），这里仍然放行卡内两份文档
+  // 是给存量卡留的：改判据那天有 191 张非终态卡一条 wiki 链接都没有，硬切会让
+  // 它们全部收不了卡，而「迭代只改机制，存量不补」是既定规则。
+  // 删除条件（别让它变成忘掉的「以后再删」）：in_progress 与 in_review 的卡
+  // 全部挂上合规 wiki 链接时，把下面的 keys.has(...) 那一支删掉。backlog 不计。
+  const wikiRows = await db
+    .select({ type: issueWorkProducts.type, url: issueWorkProducts.url, metadata: issueWorkProducts.metadata })
+    .from(issueWorkProducts)
+    .where(and(
+      eq(issueWorkProducts.companyId, companyId),
+      eq(issueWorkProducts.issueId, issue.id),
+      eq(issueWorkProducts.type, "document"),
+    ));
+  const hasWikiDoc = wikiRows.some(isFeishuIssueWikiDoc);
+
+  if (!hasWikiDoc && !(keys.has("requirements") && keys.has("tech-proposal"))) {
+    if (!keys.has("requirements")) {
+      missing.push("缺「需求设计」文档——issue document:put <卡> requirements --body-file 需求设计.md");
+    }
+    if (!keys.has("tech-proposal")) {
+      missing.push("缺「技术方案」文档——issue document:put <卡> tech-proposal --body-file 方案.md");
+    }
+    missing.push(`——或走飞书知识库通路：在「需求 issue 区」下建本卡子目录（含「技术方案」子页，正文须有「验证」字样与命令/输出代码块），再把子目录链接挂上：issue work-product:create <卡> --payload-json '{"type":"document","provider":"custom","title":"<卡号> 需求与方案","url":"${FEISHU_ISSUE_WIKI_URL_PREFIX}<node_token>","metadata":{"parentNodeToken":"${FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN}"}}'`);
   }
 
   // 门禁 A（MUL-558）：代码卡的验证证据——只判在不在，不判真假。
   // 代码卡 = 登记过工作分支（issue start 落 workingBranch）；纯调研/文字卡不检查。
+  // 走 wiki 通路的卡不在这里判：正文不在库里，这一半挪去了 CLI 创建校验。
   const techProposalBody = docRows.find((row) => row.key === "tech-proposal")?.body ?? "";
-  if (issue.workingBranch && keys.has("tech-proposal")) {
+  if (!hasWikiDoc && issue.workingBranch && keys.has("tech-proposal")) {
     const hasCommandBlock = techProposalBody.includes("```");
     const mentionsVerification = /验证|verification/i.test(techProposalBody);
     if (!hasCommandBlock || !mentionsVerification) {
