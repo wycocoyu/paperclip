@@ -5,7 +5,7 @@
 #   2. 常驻规则   ← OpenViking resources/team/rules/resident（全文，不走召回）
 #   3. 资产地图   ← OpenViking memories/entities/资源文件（OV 自动维护的档案）
 #
-# 动作组规则（建卡/开分支/写卡/推状态/评审）不注入，用到时 `ov find` 召回。
+# 动作组规则（建卡/开分支/写卡/推状态/评审）不注入，用到时走 OpenViking 的 MCP 搜索召回。
 # 常驻组不能走召回：用户提问里没有词能召回「不准直推 master」这类规则，
 # 召回不到就是静默违规，没有报错（MUL-515）。
 #
@@ -89,7 +89,7 @@ except Exception:
 }
 
 # Codex 只吃 hook 上下文的开头几行，长文会被截半。半部规则被当成整部读比没有更糟，
-# 所以它拿身份行加一句自取指引，规则自己去 ov find（MUL-117）。
+# 所以它拿身份行加一句自取指引，规则自己去 OpenViking 搜（MUL-117）。
 if [ "$PROFILE" = "compact" ]; then
   TEXT="${IDENTITY}
 
@@ -127,7 +127,8 @@ ${MAP}"
   TEXT="${TEXT}
 
 动作组规则（建卡 / 开分支 / 写卡 / 推状态 / 评审）未注入，用到时召回：
-  ov find \"<一句自然语问法>\" --uri viking://resources/team"
+  用 OpenViking 的 search / find 工具，一句自然语问法，范围 viking://resources/team
+  （没有 ov 这个命令行，能用的是 openviking-memory 插件的 MCP 工具）"
 fi
 
 mkdir -p "$HOME/.paperclip" 2>/dev/null || true
