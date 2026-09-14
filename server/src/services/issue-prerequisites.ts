@@ -92,7 +92,7 @@ export async function missingIssueClosePrerequisites(
     if (!keys.has("tech-proposal")) {
       missing.push("缺「技术方案」文档——issue document:put <卡> tech-proposal --body-file 方案.md");
     }
-    missing.push(`——或走飞书知识库通路：在「需求 issue 区」下建本卡子目录（含「技术方案」子页，正文须有「验证」字样与命令/输出代码块），再把子目录链接挂上：issue work-product:create <卡> --payload-json '{"type":"document","provider":"custom","title":"<卡号> 需求与方案","url":"${FEISHU_ISSUE_WIKI_URL_PREFIX}<node_token>","metadata":{"parentNodeToken":"${FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN}"}}'`);
+    missing.push(`——或走飞书知识库通路：在「需求 issue 区」的子树下建本卡目录（子卡挂在父卡目录下；子卡目录含「技术方案」子页，正文须有「验证」字样与命令/输出代码块），再把目录链接挂上：issue work-product:create <卡> --payload-json '{"type":"document","provider":"custom","title":"<卡号> 需求与方案","url":"${FEISHU_ISSUE_WIKI_URL_PREFIX}<node_token>","metadata":{"rootNodeToken":"${FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN}","parentNodeToken":"<直接父节点 token>"}}'`);
   }
 
   // 门禁 A（MUL-558）：代码卡的验证证据——只判在不在，不判真假。

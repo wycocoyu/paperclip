@@ -15,23 +15,29 @@ const TECH_OBJ_TOKEN = "BhLxdcWzFoe7e3xorgMcQoegnue";
 const GOOD_BODY = "# 技术方案\n\n## 验证方式\n\n```\npnpm test\n# 17 passed\n```";
 
 type Stubs = {
-  node?: unknown;
+  node?: Record<string, unknown>;
+  /** 祖先节点表：node_token → node，给沿 parent_node_token 上溯的那几次 +node-get 用 */
+  ancestors?: Record<string, Record<string, unknown>>;
   nodes?: unknown[];
   content?: string;
 };
 
 function makeRunner(stubs: Stubs = {}): LarkCliRunner & { calls: string[][] } {
   const calls: string[][] = [];
+  const target = stubs.node ?? {
+    node_token: NODE_TOKEN,
+    obj_token: "V6B1dIQaOoEkkTxtI93cVOYAnhm",
+    parent_node_token: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN,
+    space_id: SPACE_ID,
+    title: "MUL-603 收卡门禁认飞书 wiki 链接",
+  };
   const runner = (async (_file: string, args: string[]) => {
     calls.push(args);
     if (args[1] === "+node-get") {
-      return { stdout: JSON.stringify({ ok: true, data: stubs.node ?? {
-        node_token: NODE_TOKEN,
-        obj_token: "V6B1dIQaOoEkkTxtI93cVOYAnhm",
-        parent_node_token: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN,
-        space_id: SPACE_ID,
-        title: "MUL-603 收卡门禁认飞书 wiki 链接",
-      } }), stderr: "" };
+      const token = args[args.indexOf("--node-token") + 1];
+      const node = token === URL || token === target.node_token ? target : stubs.ancestors?.[token];
+      if (!node) throw new Error(`unexpected +node-get for ${token}`);
+      return { stdout: JSON.stringify({ ok: true, data: node }), stderr: "" };
     }
     if (args[1] === "+node-list") {
       return { stdout: JSON.stringify({ ok: true, data: { nodes: stubs.nodes ?? [
@@ -75,10 +81,11 @@ describe("assertFeishuIssueWikiWorkProduct · MUL-603", () => {
     expect(runner.calls[2]).toContain(TECH_OBJ_TOKEN);
   });
 
-  it("父节点不是固定页 → 拒绝创建并点名固定页 token", async () => {
-    const runner = makeRunner({ node: {
-      node_token: NODE_TOKEN, space_id: SPACE_ID, parent_node_token: "SomeOtherParent", title: "乱放的目录",
-    } });
+  it("整条祖先链都不经过固定页 → 拒绝创建并点名固定页 token", async () => {
+    const runner = makeRunner({
+      node: { node_token: NODE_TOKEN, space_id: SPACE_ID, parent_node_token: "SomeOtherParent", title: "乱放的目录" },
+      ancestors: { SomeOtherParent: { node_token: "SomeOtherParent", parent_node_token: "", title: "别的顶层页" } },
+    });
     await expect(assertFeishuIssueWikiWorkProduct({ type: "document", url: URL }, runner))
       .rejects.toThrow(FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN);
   });
@@ -132,7 +139,7 @@ describe("assertFeishuIssueWikiWorkProduct · MUL-603", () => {
     expect(payload.metadata.parentNodeToken).toBe("WRONGtoken0000000000000000");
   });
 
-  it("已填对的 metadata 原样保留，其余字段不丢", async () => {
+  it("已填对的 metadata 原样保留，其余字段不丢，只补上缺的 rootNodeToken", async () => {
     const runner = makeRunner();
     const payload = {
       type: "document",
@@ -140,6 +147,79 @@ describe("assertFeishuIssueWikiWorkProduct · MUL-603", () => {
       metadata: { parentNodeToken: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN, spaceId: SPACE_ID },
     };
     await assertFeishuIssueWikiWorkProduct(payload, runner);
-    expect(payload.metadata).toEqual({ parentNodeToken: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN, spaceId: SPACE_ID });
+    expect(payload.metadata).toEqual({
+      rootNodeToken: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN,
+      parentNodeToken: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN,
+      spaceId: SPACE_ID,
+    });
+  });
+});
+
+/**
+ * MUL-603 续：飞书目录树改成跟卡树同构（固定页 → 父卡目录 → 子卡目录 → 需求设计/技术方案），
+ * 于是「挂在固定页下」的语义变成「在固定页的子树里」，父卡目录那一层也不该再被要求有技术方案页。
+ */
+describe("assertFeishuIssueWikiWorkProduct · 卡树同构的多层目录", () => {
+  const PARENT_DIR_TOKEN = "N8oowjWdZieJ4HkYCPdcbrQ4nhb";
+  const parentDir = {
+    node_token: PARENT_DIR_TOKEN,
+    parent_node_token: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN,
+    space_id: SPACE_ID,
+    title: "MUL-101 Workflow 中断与续跑能力域",
+  };
+  const childDirNode = {
+    node_token: NODE_TOKEN,
+    obj_token: "MEZ7dZxjqoqbp7xNq51c7fStnjh",
+    parent_node_token: PARENT_DIR_TOKEN,
+    space_id: SPACE_ID,
+    title: "MUL-568 停止任务全链路取消",
+  };
+
+  it("子卡目录挂在父卡目录下 → 沿祖先链走到固定页就放行", async () => {
+    const runner = makeRunner({ node: childDirNode, ancestors: { [PARENT_DIR_TOKEN]: parentDir } });
+    await expect(assertFeishuIssueWikiWorkProduct({ type: "document", url: URL }, runner)).resolves.toBeUndefined();
+  });
+
+  it("子卡目录的 metadata：rootNodeToken 填固定页，parentNodeToken 填真实直接父节点", async () => {
+    const runner = makeRunner({ node: childDirNode, ancestors: { [PARENT_DIR_TOKEN]: parentDir } });
+    const payload: { type: string; url: string; metadata?: Record<string, unknown> | null } = { type: "document", url: URL };
+    await assertFeishuIssueWikiWorkProduct(payload, runner);
+    expect(payload.metadata).toEqual({
+      rootNodeToken: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN,
+      parentNodeToken: PARENT_DIR_TOKEN,
+    });
+  });
+
+  it("metadata.rootNodeToken 写的不是固定页 → 拒绝，不静默覆盖", async () => {
+    const runner = makeRunner({ node: childDirNode, ancestors: { [PARENT_DIR_TOKEN]: parentDir } });
+    const payload = { type: "document", url: URL, metadata: { rootNodeToken: "WRONGroot00000000000000000" } };
+    await expect(assertFeishuIssueWikiWorkProduct(payload, runner)).rejects.toThrow("rootNodeToken");
+    expect(payload.metadata.rootNodeToken).toBe("WRONGroot00000000000000000");
+  });
+
+  it("父卡目录（下面挂的是子卡目录）→ 跳过技术方案页与验证证据两问", async () => {
+    const runner = makeRunner({
+      node: parentDir,
+      nodes: [
+        { node_token: "c1", obj_token: "o1", title: "MUL-563 节点成功后提前收尾（on_success finish）" },
+        { node_token: "c2", obj_token: "o2", title: "MUL-568 停止任务全链路取消" },
+      ],
+    });
+    await expect(assertFeishuIssueWikiWorkProduct({ type: "document", url: URL }, runner)).resolves.toBeUndefined();
+    // 父卡目录只有子卡索引，没有正文可读——不该再去 docs +fetch
+    expect(runner.calls.map((c) => c.slice(0, 2))).toEqual([["wiki", "+node-get"], ["wiki", "+node-list"]]);
+  });
+
+  it("祖先链超过深度上限（成环或异常深树）→ 报错说明层级，不无限上溯", async () => {
+    const ancestors: Record<string, Record<string, unknown>> = {};
+    for (let i = 0; i < 20; i += 1) {
+      ancestors[`a${i}`] = { node_token: `a${i}`, parent_node_token: `a${i + 1}`, title: `第 ${i} 层` };
+    }
+    const runner = makeRunner({
+      node: { node_token: NODE_TOKEN, space_id: SPACE_ID, parent_node_token: "a0", title: "深树里的目录" },
+      ancestors,
+    });
+    await expect(assertFeishuIssueWikiWorkProduct({ type: "document", url: URL }, runner))
+      .rejects.toThrow(/10 层/);
   });
 });

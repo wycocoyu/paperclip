@@ -21,6 +21,12 @@ const INSTALL_HINT =
 /** 技术方案子页的判定：标题含「技术方案」。子页可能带后缀（「技术方案：附件路径改写修复」）。 */
 const TECH_PROPOSAL_TITLE = "技术方案";
 
+/** 父卡目录的判定：它下面挂的是子卡目录，标题形如「MUL-568 停止任务全链路取消」。 */
+const CHILD_ISSUE_DIR_TITLE = /^MUL-\d+/;
+
+/** 上溯祖先的层数上限：防目录成环，也防意外深树把 lark-cli 调用打爆。 */
+const MAX_ANCESTOR_DEPTH = 10;
+
 type WikiNode = {
   node_token?: string;
   obj_token?: string;
@@ -56,6 +62,60 @@ async function larkJson(
   return parsed;
 }
 
+/** metadata 里的声明字段：缺就按飞书里查到的真实值补上，填了却对不上就报错，不静默覆盖。 */
+function assertDeclared(
+  payload: { metadata?: Record<string, unknown> | null },
+  field: "rootNodeToken" | "parentNodeToken",
+  actual: string,
+): void {
+  const declared = payload.metadata?.[field];
+  if (declared === undefined || declared === null || declared === "") {
+    payload.metadata = { ...(payload.metadata ?? {}), [field]: actual };
+    return;
+  }
+  if (declared !== actual) {
+    throw new Error(
+      `payload 里 metadata.${field} 写的是 ${String(declared)}，但飞书里查到的是 ${actual}。`
+      + "服务端门禁认的是 metadata 这个声明，改对再挂。",
+    );
+  }
+}
+
+/**
+ * 沿 parent_node_token 逐级上溯，确认这个节点在固定页的子树里。
+ *
+ * 目录树跟卡树同构后是多层的（固定页 → 父卡目录 → 子卡目录），只看直接父节点会把子卡目录判错。
+ */
+async function assertUnderIssueWikiRoot(
+  runner: LarkCliRunner,
+  node: WikiNode,
+  url: string,
+): Promise<void> {
+  let current = node;
+  for (let depth = 0; depth < MAX_ANCESTOR_DEPTH; depth += 1) {
+    const parent = current.parent_node_token;
+    if (parent === FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN) return;
+    if (!parent) {
+      throw new Error(
+        `这个 wiki 节点（${node.title ?? url}）沿目录往上走到顶层（${current.title ?? current.node_token}）`
+        + `都没经过固定页「需求 issue 区」（${FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN}）。`
+        + "把本卡目录移到那一页下面，或移到那一页下的父卡目录里。",
+      );
+    }
+    const ancestor = (await larkJson(runner, [
+      "wiki", "+node-get", "--node-token", parent, "--as", "user", "--format", "json",
+    ])).data as WikiNode | undefined;
+    if (!ancestor?.node_token) {
+      throw new Error(`往上找祖先节点 ${parent} 时读不到它，无法确认 ${url} 在不在固定页下。`);
+    }
+    current = ancestor;
+  }
+  throw new Error(
+    `这个 wiki 节点（${node.title ?? url}）往上走了 ${MAX_ANCESTOR_DEPTH} 层还没到固定页`
+    + `「需求 issue 区」（${FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN}），判定为目录层级异常或成环，不再上溯。`,
+  );
+}
+
 /**
  * 创建飞书 wiki work product 前的真伪校验（MUL-603）。
  *
@@ -76,32 +136,22 @@ export async function assertFeishuIssueWikiWorkProduct(
   if (!node?.node_token) {
     throw new Error(`飞书 wiki 节点不存在或读不到：${url}`);
   }
-  if (node.parent_node_token !== FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN) {
-    throw new Error(
-      `这个 wiki 节点（${node.title ?? url}）的父节点是 ${node.parent_node_token || "(空，说明它是顶层页)"}，`
-      + `不是固定页「需求 issue 区」（${FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN}）。`
-      + "把本卡子目录移到那一页下面，或直接在那一页下建。",
-    );
-  }
+  await assertUnderIssueWikiRoot(runner, node, url);
 
-  // 这里问的是飞书里的真实父节点，而服务端收卡门禁只看得见 metadata.parentNodeToken
-  // 这个声明字段。两边查的不是同一样东西，所以缺声明时按刚查到的真实值补上，免得
-  // 链接挂上了门禁却不认；声明了却跟真实父节点对不上就报错，不静默覆盖调用方写的值。
-  const declaredParent = payload.metadata?.parentNodeToken;
-  if (declaredParent === undefined || declaredParent === null || declaredParent === "") {
-    payload.metadata = { ...(payload.metadata ?? {}), parentNodeToken: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN };
-  } else if (declaredParent !== FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN) {
-    throw new Error(
-      `payload 里 metadata.parentNodeToken 写的是 ${String(declaredParent)}，`
-      + `但这个节点在飞书里的真实父节点是 ${FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN}。`
-      + "服务端门禁认的是 metadata 这个声明，改对再挂。",
-    );
-  }
+  // 这里问的是飞书里的真实层级，而服务端收卡门禁只看得见 metadata 里的声明字段。
+  // 两边查的不是同一样东西，所以缺声明时按刚查到的真实值补上，免得链接挂上了门禁却不认；
+  // 声明了却跟真实值对不上就报错，不静默覆盖调用方写的值。
+  // rootNodeToken 是门禁现在认的那一条（节点在固定页子树里），parentNodeToken 记真实直接父节点。
+  assertDeclared(payload, "rootNodeToken", FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN);
+  assertDeclared(payload, "parentNodeToken", String(node.parent_node_token ?? ""));
 
   const children = ((await larkJson(runner, [
     "wiki", "+node-list", "--space-id", String(node.space_id ?? ""),
     "--parent-node-token", String(node.node_token), "--as", "user", "--format", "json",
   ])).data as { nodes?: WikiNode[] } | undefined)?.nodes ?? [];
+  // 父卡目录只放子卡索引，没有需求设计与技术方案，下面两问对它不成立（目录树跟卡树同构）。
+  if (children.some((child) => CHILD_ISSUE_DIR_TITLE.test((child.title ?? "").trim()))) return;
+
   const techProposal = children.find((child) => (child.title ?? "").includes(TECH_PROPOSAL_TITLE));
   if (!techProposal?.obj_token) {
     throw new Error(
