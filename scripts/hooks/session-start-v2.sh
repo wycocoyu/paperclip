@@ -127,8 +127,8 @@ ${MAP}"
   TEXT="${TEXT}
 
 动作组规则（建卡 / 开分支 / 写卡 / 推状态 / 评审）未注入，用到时召回：
-  用 OpenViking 的 search / find 工具，一句自然语问法，范围 viking://resources/team
-  （没有 ov 这个命令行，能用的是 openviking-memory 插件的 MCP 工具）"
+  ~/开源工具/OpenViking/.venv/bin/ov find \"<一句自然语问法>\" --uri viking://resources/team
+  （ov 不在 PATH 里，裸敲会 command not found，写全路径或用 openviking-memory 的 MCP 工具）"
 fi
 
 mkdir -p "$HOME/.paperclip" 2>/dev/null || true
