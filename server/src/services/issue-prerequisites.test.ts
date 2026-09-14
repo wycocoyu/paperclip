@@ -158,9 +158,30 @@ describe("missingIssueClosePrerequisites · 飞书 wiki 通路（MUL-603）", ()
     expect(missing).toEqual([]);
   });
 
-  it("wiki 链接的 parentNodeToken 不是固定页 → 不认，仍按老路拦", async () => {
+  it("子卡目录：只声明 rootNodeToken（直接父节点是父卡目录）→ 认", async () => {
     const missing = await missingIssueClosePrerequisites(
-      makeDb(onlyDecisionLog, true, [wikiDoc({ metadata: { parentNodeToken: "SomeOtherNodeToken" } })]),
+      makeDb(onlyDecisionLog, true, [wikiDoc({ metadata: {
+        rootNodeToken: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN,
+        parentNodeToken: "N8oowjWdZieJ4HkYCPdcbrQ4nhb",
+      } })]),
+      "co",
+      issue(),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("存量记录只有 parentNodeToken=固定页 → 仍认（迭代只改机制，存量不补）", async () => {
+    const missing = await missingIssueClosePrerequisites(
+      makeDb(onlyDecisionLog, true, [wikiDoc({ metadata: { parentNodeToken: FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN } })]),
+      "co",
+      issue(),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("wiki 链接的 root/parentNodeToken 都不是固定页 → 不认，仍按老路拦", async () => {
+    const missing = await missingIssueClosePrerequisites(
+      makeDb(onlyDecisionLog, true, [wikiDoc({ metadata: { rootNodeToken: "SomeOtherRoot", parentNodeToken: "SomeOtherNodeToken" } })]),
       "co",
       issue(),
     );

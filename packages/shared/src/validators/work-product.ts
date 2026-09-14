@@ -119,11 +119,17 @@ export function isFeishuIssueWikiLink(input: { type?: string | null; url?: strin
   return input.type === "document" && (input.url ?? "").startsWith(FEISHU_ISSUE_WIKI_URL_PREFIX);
 }
 
-/** 收卡门禁认的 wiki 通路：链接对，且 metadata 声明挂在固定页下（真伪由 CLI 侧创建时校验）。 */
+/**
+ * 收卡门禁认的 wiki 通路：链接对，且 metadata 声明这节点在固定页的子树里（真伪由 CLI 侧创建时校验）。
+ *
+ * 目录树跟卡树同构后子卡目录挂在父卡目录下，直接父节点不再是固定页，所以认的是 rootNodeToken；
+ * parentNodeToken 那一支是给改判据之前落库的存量记录留的（迭代只改机制，存量不补）。
+ */
 export function isFeishuIssueWikiDoc(
   input: { type?: string | null; url?: string | null; metadata?: unknown },
 ): boolean {
   if (!isFeishuIssueWikiLink(input)) return false;
-  const parent = (input.metadata as { parentNodeToken?: unknown } | null | undefined)?.parentNodeToken;
-  return parent === FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN;
+  const metadata = input.metadata as { rootNodeToken?: unknown; parentNodeToken?: unknown } | null | undefined;
+  return metadata?.rootNodeToken === FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN
+    || metadata?.parentNodeToken === FEISHU_ISSUE_WIKI_ROOT_NODE_TOKEN;
 }
